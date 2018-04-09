@@ -1,14 +1,22 @@
-resolver: lts-9.3
+resolver: lts-10.10
+
+# due to functor-infix
+allow-newer: true
 
 packages:
 - 'grin'
-- 'x64'
 
 extra-deps:
   - monad-gen-0.3.0.1
-  - llvm-hs-pure-5.0.0
-  - llvm-hs-5.0.0
+  - llvm-hs-pretty-0.2.0.0
+  - functor-infix-0.0.5
+  - QuickCheck-GenT-0.2.0
 
 flags:
   llvm-hs:
     shared-llvm: true
+
+build:
+  test-arguments:
+    additional-args:
+      - "--seed=11010"

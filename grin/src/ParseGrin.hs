@@ -1,18 +1,20 @@
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections, LambdaCase #-}
 
-module ParseGrin where
+module ParseGrin (parseGrin, parseProg, parseDef, parseExpr) where
 
+import Data.Void
 import Control.Applicative (empty)
-import Control.Monad (void)
+import Control.Monad (void, mzero)
 import Text.Megaparsec
-import Text.Megaparsec.String
-import qualified Text.Megaparsec.Lexer as L
+import qualified Text.Megaparsec.Char.Lexer as L
+import Text.Megaparsec.Char as C
 import Text.Show.Pretty (pPrint)
 import qualified Data.Set as Set
 import Grin
-import ReduceGrin
 
-keywords = Set.fromList ["case","of","pure","fetch","store","update","if","then","else","do"]
+keywords = Set.fromList ["case","of","pure","fetch","store","update","if","then","else","do", "#True", "#False"]
+
+type Parser = Parsec Void String
 
 lineComment :: Parser ()
 lineComment = L.skipLineComment "--"
@@ -42,9 +44,9 @@ var = try $ lexeme ((:) <$> lowerChar <*> many (alphaNumChar <|> oneOf "'_")) >>
   False -> return x
 
 con :: Parser String
-con = lexeme $ (:) <$> upperChar <*> many (alphaNumChar)
+con = lexeme $ some (alphaNumChar)
 
-integer = lexeme L.integer
+integer = lexeme L.decimal
 signedInteger = L.signed sc' integer
 
 float = lexeme L.float
@@ -52,13 +54,12 @@ signedFloat = L.signed sc' float
 
 -- grin syntax
 
-def = Def <$> try (L.indentGuard sc EQ (unsafePos 1) *> var) <*> many var <* op "=" <*> (L.indentGuard sc GT (unsafePos 1) >>= expr)
+def = Def <$> try (L.indentGuard sc EQ pos1 *> var) <*> many var <* op "=" <*> (L.indentGuard sc GT pos1 >>= expr)
 
 expr i = L.indentGuard sc EQ i >>
-  (\pat e b -> EBind e pat b) <$> try (value <* op "<-") <*> simpleExp i <*> expr i <|>
+  try ((\pat e b -> EBind e pat b) <$> (try (value <* op "<-") <|> pure Unit) <*> simpleExp i <*> expr i ) <|>
   ECase <$ kw "case" <*> value <* kw "of" <*> (L.indentGuard sc GT i >>= some . alternative) <|>
   ifThenElse i <|>
-  try ((\n v e -> EBind (SUpdate n v) Unit e) <$ kw "update" <*> var <*> value <*> expr i) <|>
   simpleExp i
 
 ifThenElse i = do
@@ -69,16 +70,24 @@ ifThenElse i = do
   L.indentGuard sc EQ i
   kw "else"
   e <- (L.indentGuard sc GT i >>= expr)
-  return $ ECase v [ Alt (TagPat (Tag C "True"  0)) t
-                   , Alt (TagPat (Tag C "False" 0)) e
+  return $ ECase v [ Alt (LitPat (LBool True))  t
+                   , Alt (LitPat (LBool False)) e
                    ]
 
 simpleExp i = SReturn <$ kw "pure" <*> value <|>
-              SStore <$ kw "store" <*> value <|>
+              SStore <$ kw "store" <*> satisfyM nodeOrVar value <|>
               SFetchI <$ kw "fetch" <*> var <*> optional (between (char '[') (char ']') $ fromIntegral <$> integer) <|>
-              SUpdate <$ kw "update" <*> var <*> value <|>
+              SUpdate <$ kw "update" <*> var <*> satisfyM nodeOrVar value <|>
               SBlock <$ kw "do" <*> (L.indentGuard sc GT i >>= expr) <|>
-              SApp <$> var <*> some simpleValue
+              SApp <$> primNameOrDefName <*> some simpleValue
+  where
+    nodeOrVar = \case
+      ConstTagNode _ _ -> True
+      VarTagNode _ _   -> True
+      Var _            -> True
+      _                -> False
+
+primNameOrDefName = ('_':) <$ char '_' <*> var <|> var
 
 alternative i = Alt <$> try (L.indentGuard sc EQ i *> altPat) <* op "->" <*> (L.indentGuard sc GT i >>= expr)
 
@@ -86,24 +95,43 @@ altPat = parens (NodePat <$> tag <*> many var) <|>
          TagPat <$> tag <|>
          LitPat <$> literal
 
-tag = Tag C <$ char 'C' <*> con <*> pure 0 <|> -- TODO
-      Tag F <$ char 'F' <*> var <*> pure 0 <|> -- TODO
-      Tag P <$ char 'P' <*> (var <|> con) <*> pure 0 -- TODO
+tag = Tag C <$ char 'C' <*> con <|>
+      Tag F <$ char 'F' <*> var <|>
+      Tag P <$ char 'P' <*> (var <|> con)
 
 simpleValue = Lit <$> literal <|>
               Var <$> var
 
 value = Unit <$ op "()" <|>
-        parens (ConstTagNode <$> tag <*> many simpleValue) <|>
-        parens (VarTagNode <$> var <*> many simpleValue) <|>
+        parens (ConstTagNode <$> tag <*> many simpleValue <|> VarTagNode <$> var <*> many simpleValue) <|>
         ValTag <$> tag <|>
         simpleValue
 
 literal :: Parser Lit
-literal = LInt . fromIntegral <$> signedInteger
+literal = (try $ LFloat . realToFrac <$> signedFloat) <|>
+          (try $ LWord64 . fromIntegral <$> lexeme (L.decimal <* C.char 'u')) <|>
+          LInt64 . fromIntegral <$> signedInteger <|>
+          LBool <$> (True <$ kw "#True" <|> False <$ kw "#False")
 
---parseFromFile :: Parser _ -> String -> IO _
-parseFromFile p file = runParser p file <$> readFile file
+satisfyM :: (a -> Bool) -> Parser a -> Parser a
+satisfyM pred parser = do
+  x <- parser
+  if pred x
+    then pure x
+    else mzero
 
---parseGrin :: String -> IO (Either _ [Def])
-parseGrin fname = parseFromFile (some def <* sc <* eof) fname
+
+grinModule :: Parser Exp
+grinModule = Program <$> some def <* sc <* eof
+
+parseGrin :: String -> String -> Either (ParseError Char Void) Exp
+parseGrin filename content = runParser grinModule filename content
+
+parseProg :: String -> Exp
+parseProg = either (error . show) id . parseGrin ""
+
+parseDef :: String -> Exp
+parseDef = either (error . show) id . runParser def ""
+
+parseExpr :: String -> Exp
+parseExpr = either (error . show) id . runParser (expr pos1) ""

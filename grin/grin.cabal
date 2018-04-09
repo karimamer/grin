@@ -16,38 +16,110 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:
+    Check
     Eval
     Grin
+    GrinTH
+    TypeEnv
+    TypeCheck
+    Optimizations
     Pretty
-    PrettyHPT
+    PrimOps
     ParseGrin
-    ReduceGrin
-    STReduceGrin
-    Transformations
-    TrafoPlayground
-    AbstractRunGrin
-    CodeGenX64
-    CodeGenLLVM
-    JITLLVM
+    Reducer.PrimOps
+    Reducer.Pure
+    Reducer.ST
+    Reducer.LLVM.Base
+    Reducer.LLVM.InferType
+    Reducer.LLVM.TypeGen
+    Reducer.LLVM.CodeGen
+    Reducer.LLVM.PrimOps
+    Reducer.LLVM.JIT
+    Test
+    Gspec
+    Statistics
+    Transformations.AssignStoreIDs
+    Transformations.GenerateEval
+    Transformations.BindNormalisation
+    Transformations.Rename
+    Transformations.Substitution
+    Transformations.Playground
+    Transformations.Util
+    Transformations.Simplifying.Vectorisation
+    Transformations.Simplifying.Vectorisation2
+    Transformations.Simplifying.SplitFetch
+    Transformations.Simplifying.CaseSimplification
+    Transformations.Simplifying.RegisterIntroduction
+    Transformations.Simplifying.RightHoistFetch
+    Transformations.Simplifying.RightHoistFetch2
+    Transformations.Optimising.EvaluatedCaseElimination
+    Transformations.Optimising.TrivialCaseElimination
+    Transformations.Optimising.SparseCaseOptimisation
+    Transformations.Optimising.UpdateElimination
+    Transformations.Optimising.CaseCopyPropagation
+    Transformations.Optimising.CopyPropagation
+    Transformations.Optimising.ConstantPropagation
+    Transformations.Optimising.DeadProcedureElimination
+    Transformations.Optimising.DeadVariableElimination
+    Transformations.Optimising.CSE
+    Transformations.Optimising.Inlining
+    Transformations.Optimising.ArityRaising
+    Transformations.Optimising.ConstantFolding
+    Transformations.Optimising.GeneralizedUnboxing
+    AbstractInterpretation.AbstractRunGrin
+    AbstractInterpretation.HPTResult
+    AbstractInterpretation.HPTResultNew
+    AbstractInterpretation.PrettyHPT
+    AbstractInterpretation.Pretty
+    AbstractInterpretation.IR
+    AbstractInterpretation.CodeGen
+    AbstractInterpretation.Reduce
+    Frontend.FromSTG
+    Frontend.Idris.CodegenGrin
     VarGen
+    Pipeline
+    Assertions
+    Grammar
 
   build-depends:
     base,
     containers,
+    bimap,
     mtl,
     megaparsec,
     pretty-show,
     vector,
     deepseq,
-    unbound,
     recursion-schemes,
     ansi-wl-pprint,
     monad-gen,
     free,
-    x86-64bit,
     bytestring,
     llvm-hs,
-    llvm-hs-pure
+    llvm-hs-pure,
+    filepath,
+    transformers,
+    microlens,
+    microlens-mtl,
+    microlens-th,
+    microlens-platform,
+    process,
+    text,
+    llvm-hs-pretty,
+    optparse-applicative,
+    directory,
+    pretty-simple,
+    functor-infix,
+    generic-random,
+    hspec,
+    extra,
+    logict,
+    QuickCheck,
+    ghc,
+    idris,
+    neat-interpolation,
+    template-haskell
+
   default-language:    Haskell2010
 
 executable grin
@@ -58,8 +130,20 @@ executable grin
                      , grin
                      , recursion-schemes
                      , ansi-wl-pprint
+                     , megaparsec
                      , containers
                      , process
+                     , pretty-show
+                     , llvm-hs-pretty
+                     , text
+                     , filepath
+                     , transformers
+                     , microlens
+                     , microlens-th
+                     , microlens-mtl
+                     , microlens-platform
+                     , optparse-applicative
+                     , directory
   default-language:    Haskell2010
 
 test-suite grin-test
@@ -67,8 +151,31 @@ test-suite grin-test
   hs-source-dirs:      test
   main-is:             Spec.hs
   build-depends:       base
+                     , containers
+                     , functor-infix
                      , grin
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+                     , hspec
+                     , hspec-discover
+                     , QuickCheck
+                     , deepseq
+                     , vector
+  other-modules:       Transformations.Simplifying.RegisterIntroductionSpec
+                     , Transformations.Simplifying.CaseSimplificationSpec
+                     , Transformations.Simplifying.SplitFetchSpec
+                     , Transformations.Simplifying.RightHoistFetchSpec
+                     , Transformations.Simplifying.VectorisationSpec
+                     , Transformations.Optimising.CaseCopyPropagationSpec
+                     , Transformations.Optimising.ConstantFoldingSpec
+                     , Transformations.Optimising.EvaluatedCaseEliminationSpec
+                     , Transformations.Optimising.TrivialCaseEliminationSpec
+                     , Transformations.Optimising.SparseCaseOptimisationSpec
+                     , Transformations.Optimising.UpdateEliminationSpec
+                     , Transformations.Optimising.CSESpec
+                     , Transformations.Optimising.GeneralizedUnboxingSpec
+                     , Transformations.Optimising.ArityRaisingSpec
+                     , TestSpec
+                     , PipelineSpec
+                     , ParserSpec
   default-language:    Haskell2010
 
 benchmark grin-benchmark
@@ -95,3 +202,49 @@ executable hpt
 source-repository head
   type:     git
   location: https://github.com/andorp/grin
+
+executable ghc-grin
+  hs-source-dirs:      app
+  main-is:             GHCGrin.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , mtl
+                     , grin
+                     , ghc
+                     , ghc-paths
+  default-language:    Haskell2010
+
+executable idris-codegen-grin
+  main-is:        IdrisGrin.hs
+  hs-source-dirs: app
+
+  build-depends:  idris
+                , base
+                , containers
+                , directory
+                , filepath
+                , haskeline >= 0.7
+                , mtl
+                , transformers
+                , grin
+
+  if os(linux)
+     cpp-options:   -DLINUX
+     build-depends: unix < 2.8
+  if os(freebsd)
+     cpp-options:   -DFREEBSD
+     build-depends: unix < 2.8
+  if os(dragonfly)
+     cpp-options:   -DDRAGONFLY
+     build-depends: unix < 2.8
+  if os(darwin)
+     cpp-options:   -DMACOSX
+     build-depends: unix < 2.8
+  if os(windows)
+     cpp-options:   -DWINDOWS
+     build-depends: Win32 < 2.4
+
+  ghc-prof-options: -auto-all -caf-all
+  ghc-options:      -threaded -rtsopts -funbox-strict-fields
+
+

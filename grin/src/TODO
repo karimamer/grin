@@ -17,7 +17,7 @@ WHY:
   - practice unbound
   - learn grin
   - practice writing transformations
-  - etimate the raw performance of grin
+  - estimate the raw performance of grin
 
 EXPERIMENTAL:
   - try to JIT GRIN
@@ -41,6 +41,11 @@ THOUGHTS:
     program optimization is evaluation
     type inference/check is evaluation
 
+  GRIN optimisations vs supercompilation
+    GRIN does calculation on tags that comes from the frontend language's type system therefore it terminates for sure.
+    The tag related calculations are much more limited than computations on arbitrary values.
+    Supercompilation does general computation without binding time annotations.
+
 micro TODO:
   - compile LC_SmallStep
   - closure conversion
@@ -54,3 +59,22 @@ JIT TODO:
   - register allocator monad
   - grin AST serialization and read back (machine code layout mapping)
   - generate garbage collector
+
+THOUGHTS:
+  There is no difference between the program and the program input in a partial evaluation setting. It's just information processing.
+
+  Inline or not to inline?
+    - do both, measure the differences
+    - obviously it will explode in complexity, but it is possible to do a monte carlo simulation
+    - or use machine learning where the local AST structure is the input and the performance improvement is the oputput;
+      the size of the local AST can be increased until it reaches the whole AST
+
+dynamic vs static typing:
+  what if the difference between the two is the type checking binding time?
+  i.e. whether the types are recuced in compile time or run time
+  maybe it is possible to create a system in a multi-stage programming environment where
+    both a static and a dynamic typed language could be derived from a single multi-stage implementation
+
+read about Gradual Typing
+
+

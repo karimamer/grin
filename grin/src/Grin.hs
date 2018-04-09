@@ -1,21 +1,31 @@
 {-# LANGUAGE DeriveGeneric, DeriveAnyClass, DeriveFunctor, TypeFamilies #-}
 {-# LANGUAGE DeriveFoldable, DeriveTraversable, PatternSynonyms #-}
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase, RankNTypes, ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Grin where
 
 import Data.Functor.Foldable as Foldable
 import Control.DeepSeq
 import Data.Map (Map)
 import GHC.Generics (Generic)
+import Debug.Trace (trace)
+import Data.Int
+import Data.Word
+import Data.Text (Text)
+import Data.List (isPrefixOf)
+import Lens.Micro.Platform
+import Data.Maybe
+
 
 type Name = String
-
-type Prog = Map Name Def
 
 type SimpleExp = Exp
 type Alt = Exp
 type Def = Exp
 type Program = Exp
+
+isPrimName :: Name -> Bool
+isPrimName = isPrefixOf "_prim_"
 
 data Exp
   = Program     [Def]
@@ -27,50 +37,109 @@ data Exp
   | SApp        Name [SimpleVal]
   | SReturn     Val
   | SStore      Val
-  | SFetchI     Name (Maybe Int) -- fetch a full node or a single node item
+  | SFetchI     Name (Maybe Int) -- fetch a full node or a single node item in low level GRIN
   | SUpdate     Name Val
   | SBlock      Exp
   -- Alt
   | Alt CPat Exp
-  deriving (Generic, NFData, Eq, Show)
+  deriving (Generic, NFData, Eq, Ord, Show)
 
 pattern SFetch name = SFetchI name Nothing
 pattern SFetchF name = SFetchIF name Nothing
+
+isSimpleExp :: Exp -> Bool
+isSimpleExp = \case
+  SApp    _ _ -> True
+  SReturn _   -> True
+  SStore  _   -> True
+  SFetchI _ _ -> True
+  SUpdate _ _ -> True
+  SBlock  _   -> True
+  _           -> False
 
 selectNodeItem :: Maybe Int -> Val -> Val
 selectNodeItem Nothing val = val
 selectNodeItem (Just 0) (ConstTagNode tag args) = ValTag tag
 selectNodeItem (Just i) (ConstTagNode tag args) = args !! (i - 1)
 
-type LPat = Val
+type LPat = Val -- ConstTagNode, VarTagNode, ValTag, Unit, Lit, Var
 type SimpleVal = Val
 -- TODO: use data types a la carte style to build different versions of Val?
 data Val
-  = ConstTagNode  Tag  [SimpleVal] -- complete node (constant tag)
+  = ConstTagNode  Tag  [SimpleVal] -- complete node (constant tag) ; HIGH level GRIN
   | VarTagNode    Name [SimpleVal] -- complete node (variable tag)
   | ValTag        Tag
-  | Unit
+  | Unit                           -- HIGH level GRIN
   -- simple val
-  | Lit Lit
-  | Var Name
+  | Lit Lit                        -- HIGH level GRIN
+  | Var Name                       -- HIGH level GRIN
   -- extra
-  | Loc Int
-  | Undefined
+  | Loc Int   -- TODO: remove ASAP!
+  | Undefined -- TODO: remove ASAP!
   deriving (Generic, NFData, Eq, Ord, Show)
 
-isLit :: Val -> Bool
-isLit = \case
-  Lit l -> True
-  _     -> False
+isBasicValue :: Val -> Bool
+isBasicValue = \case
+  ValTag _ -> True
+  Unit     -> True
+  Lit _    -> True
+  _        -> False
 
-data Lit = LInt Int
+class FoldNames n where
+  foldNames :: (Monoid m) => (Name -> m) -> n -> m
+
+instance FoldNames Val where
+  foldNames f = \case
+    ConstTagNode  _tag vals -> mconcat $ foldNames f <$> vals
+    VarTagNode    name vals -> mconcat $ (f name) : (foldNames f <$> vals)
+    ValTag        _tag      -> mempty
+    Unit                    -> mempty
+    -- simple val
+    Lit lit                 -> mempty
+    Var name                -> f name
+    -- extra
+    Loc int                 -> mempty
+    Undefined               -> mempty
+
+match :: Traversal' a b -> a -> Bool
+match t x = isJust $ x ^? t
+
+isLit :: Val -> Bool
+isLit = match _Lit
+
+_Lit :: Traversal' Val Lit
+_Lit f (Lit l) = Lit <$> f l
+_Lit _ rest    = pure rest
+
+_Var :: Traversal' Val Name
+_Var f (Var name) = Var <$> f name
+_Var _ rest       = pure rest
+
+data Lit
+  = LInt64  Int64
+  | LWord64 Word64
+  | LFloat  Float
+  | LBool   Bool
   deriving (Generic, NFData, Eq, Ord, Show)
 
 data CPat
-  = NodePat Tag [Name]
+  = NodePat Tag [Name]  -- HIGH level GRIN
+  | LitPat  Lit         -- HIGH level GRIN
   | TagPat  Tag
-  | LitPat  Lit
-  deriving (Generic, NFData, Eq, Show)
+  | DefaultPat
+  deriving (Generic, NFData, Eq, Show, Ord)
+
+isBasicCPat :: CPat -> Bool
+isBasicCPat = \case
+  TagPat _ -> True
+  LitPat _ -> True
+  _        -> False
+
+instance FoldNames CPat where
+  foldNames f = \case
+    NodePat _ names -> mconcat (map f names)
+    TagPat _ -> mempty
+    LitPat _ -> mempty
 
 data TagType = C | F | P
   deriving (Generic, NFData, Eq, Ord, Show)
@@ -78,7 +147,6 @@ data TagType = C | F | P
 data Tag = Tag
   { tagType :: TagType
   , tagName :: Name
-  , tagArity :: Int
   }
   deriving (Generic, NFData, Eq, Ord, Show)
 
@@ -134,19 +202,85 @@ instance Corecursive Exp where
   -- Alt
   embed (AltF cpat exp) = Alt cpat exp
 
--- * Templates
+type instance Base Val = ValF
 
-{-
-case exp of
-  Program     defs               -> program defs
-  Def         name names exp     -> def name names exp
-  EBind       simpleExp lpat exp -> ebind simpleExp lpat exp
-  ECase       val alts           -> ecase val alts
-  SApp        name simpleVals    -> sapp name simpleVals
-  SReturn     val                -> sreturn val
-  SStore      val                -> sstore  val
-  SFetch      name               -> sfetch  name
-  SUpdate     name val           -> supdate name val
-  SBlock      exp                -> sblock exp
-  Alt cpat exp                   -> alt cpat exp
--}
+data ValF a
+  = ConstTagNodeF  Tag  [a] -- complete node (constant tag)
+  | VarTagNodeF    Name [a] -- complete node (variable tag)
+  | ValTagF        Tag
+  | UnitF
+  -- simple val
+  | LitF Lit
+  | VarF Name
+  -- extra
+  | LocF Int
+  | UndefinedF
+  deriving (Generic, NFData, Eq, Show, Functor, Foldable, Traversable)
+
+instance Recursive Val where
+  project = \case
+    ConstTagNode  tag  simpleVals -> ConstTagNodeF tag simpleVals
+    VarTagNode    name simpleVals -> VarTagNodeF name simpleVals
+    ValTag        tag             -> ValTagF tag
+    Unit                          -> UnitF
+
+    Lit lit    -> LitF lit
+    Var name   -> VarF name
+
+    Loc int    -> LocF int
+    Undefined  -> UndefinedF
+
+instance Corecursive Val where
+  embed = \case
+    ConstTagNodeF  tag  as -> ConstTagNode tag  as
+    VarTagNodeF    name as -> VarTagNode   name as
+    ValTagF        tag     -> ValTag       tag
+    UnitF                  -> Unit
+
+    LitF lit   -> Lit lit
+    VarF name  -> Var name
+
+    LocF int   -> Loc int
+    UndefinedF -> Undefined
+
+data NamesInExpF e a = NamesInExpF
+  { namesExp   :: ExpF e
+  , namesNameF :: Name -> a
+  } deriving (Functor)
+
+instance Foldable (NamesInExpF Exp) where
+  foldr f b (NamesInExpF expf fn) = case expf of
+    ProgramF  _            -> b
+    DefF      name names _ -> foldr f b $ map fn (name:names)
+    -- Exp
+    EBindF    se lPat _  -> foldr f (foldr f b (NamesInExpF (project se) fn)) $ namesInVal lPat
+    ECaseF    val _      -> foldr f b $ namesInVal val
+    -- Simple Expr
+
+    -- Does not collect function names in application
+    SAppF     _name simpleVals -> foldr f b $ (map fn $ concatMap (foldNames list) simpleVals)
+    SReturnF  val -> foldr f b $ namesInVal val
+    SStoreF   val -> foldr f b $ namesInVal val
+    SFetchIF  name mpos -> f (fn name) b
+    SUpdateF  name val  -> foldr f b (fn name : namesInVal val)
+    SBlockF   _ -> b
+    -- Alt
+    AltF cPat _ -> foldr f b $ map fn $ foldNames list cPat
+    where
+      namesInVal = map fn . foldNames list
+      list x = [x]
+
+dCoAlg :: (a -> String) -> (a -> ExpF b) -> (a -> ExpF b)
+dCoAlg dbg f = f . (\x -> trace (dbg x) x)
+
+dAlg :: (b -> String) -> (ExpF a -> b) -> (ExpF a -> b)
+dAlg dbg f = (\x -> trace (dbg x) x) . f
+
+isConstant :: Val -> Bool
+isConstant = cata $ \case
+  ConstTagNodeF  tag params -> and params
+  ValTagF        tag        -> True
+  UnitF                     -> True
+  LitF lit                  -> True
+  _                         -> False
+

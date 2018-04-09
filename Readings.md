@@ -2,6 +2,15 @@
 
 http://www.timphilipwilliams.com/posts/2013-01-16-fixing-gadts.html
 
+# GHC core getting started
+
+- [Dive into GHC: Pipeline](http://www.stephendiehl.com/posts/ghc_01.html)
+- [Dive into GHC: Intermediate Forms](http://www.stephendiehl.com/posts/ghc_02.html)
+- [Dive into GHC: Targeting Core](http://www.stephendiehl.com/posts/ghc_03.html)
+
+# LLVM-HS
+
+- [Calling External Functions from JIT-compiled LLVM Modules using llvm-hs](https://purelyfunctional.org/posts/2018-04-02-llvm-hs-jit-external-function.html)
 
 # Recursion schemes
 
@@ -26,6 +35,7 @@ Limits of recusrion schemes? Maybe a hylo can help to implement the list filter?
 - [Promorphisms, Pre and Post](https://jtobin.io/promorphisms-pre-post) - Pratical examples of pre- and postpromorphisms by Jared Tobin.
 - [Time Traveling Recursion Schemes](https://jtobin.io/time-traveling-recursion) - Exploring histo and futu by example by Jared Tobin.
 - [Correcting the Visitor pattern](http://logji.blogspot.co.uk/2012/02/correcting-visitor-pattern.html) - Showing that the Visitor pattern implements an f-algebra for use with a catamorphism (in Java).
+- https://stackoverflow.com/questions/36851766/histomorphisms-zygomorphisms-and-futumorphisms-specialised-to-lists
 
 ## Cheat Sheet
 

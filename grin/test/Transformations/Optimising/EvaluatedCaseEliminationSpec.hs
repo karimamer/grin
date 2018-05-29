@@ -4,14 +4,9 @@ module Transformations.Optimising.EvaluatedCaseEliminationSpec where
 import Transformations.Optimising.EvaluatedCaseElimination
 
 import Test.Hspec
-import Grin
 import GrinTH
 import Test hiding (newVar)
 import Assertions
-import ParseGrin
-import TypeEnv
-import Data.Monoid
-import Control.Arrow
 
 
 runTests :: IO ()
@@ -25,6 +20,17 @@ spec = do
           case v of
             (CLeft l)  -> pure v
             (CRight r) -> pure v
+        |]
+      let after = [expr|
+          pure v
+        |]
+      evaluatedCaseElimination (ctx before) `sameAs` (ctx after)
+
+    it "default case" $ do
+      let before = [expr|
+          case v of
+            (CLeft l)   -> pure v
+            #default    -> pure v
         |]
       let after = [expr|
           pure v

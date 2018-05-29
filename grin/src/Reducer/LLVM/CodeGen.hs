@@ -17,7 +17,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Vector (Vector)
 import qualified Data.Vector as V
-import Data.List (unzip4)
+import qualified Data.List as List
 
 import LLVM.AST hiding (callingConvention, functionAttributes)
 import LLVM.AST.Type as LLVM
@@ -29,7 +29,8 @@ import qualified LLVM.AST.Linkage as L
 import qualified LLVM.AST as AST
 import qualified LLVM.AST.Float as F
 import qualified LLVM.AST.FunctionAttribute as FA
-import LLVM.AST.Global
+import qualified LLVM.AST.RMWOperation as RMWOperation
+import LLVM.AST.Global as Global
 import LLVM.Context
 import LLVM.Module
 
@@ -44,6 +45,9 @@ import Reducer.LLVM.Base
 import Reducer.LLVM.PrimOps
 import Reducer.LLVM.TypeGen
 import Reducer.LLVM.InferType
+
+debugMode :: Bool
+debugMode = True
 
 toLLVM :: String -> AST.Module -> IO BS.ByteString
 toLLVM fname mod = withContext $ \ctx -> do
@@ -62,29 +66,29 @@ codeGenVal :: Val -> CG Operand
 codeGenVal val = case val of
   -- TODO: var tag node support
   ConstTagNode tag args -> do
-    opTag <- ConstantOperand <$> getTagId tag
     opArgs <- mapM codeGenVal args
 
     T_NodeSet ns <- typeOfVal val
     ty <- typeOfVal val
     let cgTy = toCGType ty
         TaggedUnion{..} = cgTaggedUnion cgTy
+        nodeName = printf "node_%s" (show $ PP tag)
         -- set node items
         build agg (item, TUIndex{..}) = do
-          codeGenLocalVar "node" (cgLLVMType cgTy) $ AST.InsertValue
+          codeGenLocalVar nodeName (cgLLVMType cgTy) $ AST.InsertValue
             { aggregate = agg
             , element   = item
             , indices'  = [1 + tuStructIndex, tuArrayIndex]
             , metadata  = []
             }
 
-        -- set tag
-    agg0 <- codeGenLocalVar "node" (cgLLVMType cgTy) $ AST.InsertValue
-            { aggregate = undef tuLLVMType
-            , element   = opTag
-            , indices'  = [0]
-            , metadata  = []
-            }
+    -- set tag
+    tagId <- getTagId tag
+    let agg0 = ConstantOperand $ C.Struct
+          { structName    = Nothing
+          , isPacked      = True
+          , memberValues  = tagId : [C.Undef t | t <- tail $ elementTypes tuLLVMType]
+          }
     foldM build agg0 $ zip opArgs $ V.toList $ Map.findWithDefault undefined tag tuMapping
 
   ValTag tag  -> ConstantOperand <$> getTagId tag
@@ -105,6 +109,7 @@ getCPatConstant = \case
   TagPat  tag       -> getTagId tag
   LitPat  lit       -> pure $ codeGenLit lit
   NodePat tag args  -> getTagId tag
+  DefaultPat        -> pure C.TokenNone
 
 getCPatName :: CPat -> String
 getCPatName = \case
@@ -115,6 +120,7 @@ getCPatName = \case
     LBool v   -> "bool_" ++ show v
     LFloat v  -> error "pattern match on float is not supported"
   NodePat tag _ -> tagName tag
+  DefaultPat  -> "default"
  where
   tagName (Tag c name) = printf "%s%s" (show c) name
 
@@ -128,8 +134,14 @@ getCPatName = \case
 toModule :: Env -> AST.Module
 toModule Env{..} = defaultModule
   { moduleName = "basic"
-  , moduleDefinitions = reverse _envDefinitions
+  , moduleDefinitions = heapPointerDef : reverse _envDefinitions
   }
+  where
+    heapPointerDef = GlobalDefinition globalVariableDefaults
+      { name          = mkName (heapPointerName)
+      , Global.type'  = i64
+      , initializer   = Just $ Null i64
+      }
 
 {-
   type of:
@@ -149,11 +161,19 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
     SBlockF a -> snd $ a
 
     EBindF (leftExp, leftResultM) lpat (_,rightResultM) -> do
-      leftResult <- leftResultM
+      leftResult <- case (leftExp, lpat) of
+        -- FIXME: this is an ugly hack to compile SStore ; because it requires the binder name to for type lookup
+        (SStore val, Var name) -> do
+          nodeLocation <- codeGenIncreaseHeapPointer name
+          codeGenStoreNode val nodeLocation -- TODO
+          pure $ O locationCGType nodeLocation
+
+        -- normal case ; this should be the only case here normally
+        _ -> leftResultM
       case lpat of
           VarTagNode{} -> error $ printf "TODO: codegen not implemented %s" (show $ pretty lpat)
           ConstTagNode tag args -> do
-            (cgTy,operand) <- getOperand "node" leftResult
+            (cgTy,operand) <- getOperand (printf "node_%s" . show $ PP tag) leftResult
             let mapping = tuMapping $ cgTaggedUnion cgTy
             -- bind node pattern variables
             forM_ (zip (V.toList $ Map.findWithDefault undefined tag mapping) args) $ \(TUIndex{..}, arg) -> case arg of
@@ -163,11 +183,6 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
               _ -> pure ()
           Var name -> do
             getOperand name leftResult >>= addConstant name . snd
-            case leftExp of
-              -- NOTE: increase the heap ponter where the location information is avalable ; weird solution
-              SStore{}  -> codeGenIncreaseHeapPointer name
-              _         -> pure ()
-
           _ -> getOperand "tmp" leftResult >> pure ()
       rightResultM
 
@@ -181,36 +196,19 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
         then codeGenPrimOp name args convertedArgs
         else do
           -- call to top level functions
-          let wrappedResultType = withHeapPointer $ cgLLVMType retType -- add the returning heap pointer
-              functionType      = FunctionType
-                { resultType    = wrappedResultType
-                , argumentTypes = locationLLVMType : map cgLLVMType argTypes
+          let functionType      = FunctionType
+                { resultType    = cgLLVMType retType
+                , argumentTypes = map cgLLVMType argTypes
                 , isVarArg      = False
                 }
-          -- HINT: pass heap pointer as the first argument
-          heapPointer <- gets _envHeapPointer
-          -- HINT: wrapped result = heap pointer + function result
-          wrappedResult <- codeGenLocalVar (printf "%s_result" name) wrappedResultType $ Call
+          pure . I retType $ AST.Call
             { tailCallKind        = Just Tail
-            , callingConvention   = CC.C
+            , callingConvention   = CC.Fast
             , returnAttributes    = []
             , function            = Right . ConstantOperand $ GlobalReference (ptr functionType) (mkName name)
-            , arguments           = zip (heapPointer : convertedArgs) (repeat [])
+            , arguments           = zip convertedArgs (repeat [])
             , functionAttributes  = []
             , metadata            = []
-            }
-          -- extract the new heap pointer
-          newHeapPointer <- codeGenLocalVar heapPointerName locationLLVMType $ AST.ExtractValue
-            { aggregate = wrappedResult
-            , indices'  = [0]
-            , metadata  = []
-            }
-          modify' $ \env -> env {_envHeapPointer = newHeapPointer}
-          -- extract the  real result from the wrapped result
-          pure . I retType $ AST.ExtractValue
-            { aggregate = wrappedResult
-            , indices'  = [1]
-            , metadata  = []
             }
 
     AltF _ a -> snd a
@@ -233,58 +231,43 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
               forM_ (zip args $ V.toList mapping) $ \(argName, TUIndex{..}) -> do
                 let indices = [1 + tuStructIndex, tuArrayIndex]
                 emit [(mkName argName) := AST.ExtractValue {aggregate = tuVal, indices' = indices, metadata = []}]
-
+          DefaultPat -> pure ()
           _ -> error "not implemented"
 
     DefF name args (_,body) -> do
       -- clear def local state
-      -- set heap pointer
-      localHeapPointerName <- uniqueName heapPointerName
-      let heapPointerParameter = Parameter locationLLVMType localHeapPointerName []
-          clearDefState = modify' $ \env -> env
+      let clearDefState = modify' $ \env -> env
             { _envBasicBlocks       = mempty
             , _envInstructions      = mempty
             , _constantMap          = mempty
             , _currentBlockName     = mkName ""
             , _envBlockInstructions = mempty
             , _envBlockOrder        = mempty
-            , _envHeapPointer       = LocalReference locationLLVMType localHeapPointerName
             }
       clearDefState
       activeBlock (mkName $ name ++ ".entry")
-      (cgTy,result) <- body >>= getOperand (printf "%s_result" name)
-      let wrappedRetType = withHeapPointer $ cgLLVMType cgTy
-      -- return the heap pointer + function result
-      heapPointer <- gets _envHeapPointer
-      wrappedResult0 <- codeGenLocalVar (printf "%s_wrapped_result" name) wrappedRetType $ AST.InsertValue
-        { aggregate = undef wrappedRetType
-        , element   = heapPointer
-        , indices'  = [0]
-        , metadata  = []
-        }
-      wrappedResult1 <- codeGenLocalVar (printf "%s_wrapped_result" name) wrappedRetType $ AST.InsertValue
-        { aggregate = wrappedResult0
-        , element   = result
-        , indices'  = [1]
-        , metadata  = []
-        }
-
+      (cgTy, result) <- body >>= getOperand (printf "result.%s" name)
+      let llvmRetType = cgLLVMType cgTy
       closeBlock $ Ret
-        { returnOperand = Just wrappedResult1
+        { returnOperand = Just result
         , metadata'     = []
         }
-      errorBlock
+
+      when debugMode $ do
+        errorBlock
       blockInstructions <- Map.delete (mkName "") <$> gets _envBlockInstructions
       unless (Map.null blockInstructions) $ error $ printf "unclosed blocks in %s\n  %s" name (show blockInstructions)
       blocks <- gets _envBasicBlocks
       (retType, argTypes) <- getFunctionType name
-      when (retType /= cgTy) $ error $ printf "return type mismatch for %s\n  retTy: %s\n  cgTy: %s\n" name (show retType) (show cgTy)
+      -- TODO: improve this check
+      -- when (retType /= cgTy) $ error $ printf "return type mismatch for %s\n  retTy: %s\n  cgTy: %s\n" name (show retType) (show cgTy)
       let def = GlobalDefinition functionDefaults
             { name        = mkName name
-            , parameters  = (heapPointerParameter : [Parameter (cgLLVMType argType) (mkName a) [] | (a, argType) <- zip args argTypes], False) -- HINT: False - no var args
-            , returnType  = wrappedRetType -- includes the heap pointer
+            , parameters  = ([Parameter (cgLLVMType argType) (mkName a) [] | (a, argType) <- zip args argTypes], False) -- HINT: False - no var args
+            , returnType  = llvmRetType
             , basicBlocks = Map.elems blocks
-            , callingConvention = CC.C
+            , callingConvention = if name == "grinMain" then CC.C else CC.Fast
+            , linkage = if name == "grinMain" then L.External else L.Private
             , functionAttributes = [Right $ FA.StringAttribute "no-jump-tables" "true"]
             }
       clearDefState
@@ -308,15 +291,17 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
         }
       -- switch on possible tags
       TypeEnv{..} <- gets _envTypeEnv
-      let T_SimpleType (T_Location locs) = Map.findWithDefault undefined name _variable
+      let locs          = case Map.lookup name _variable of
+            Just (T_SimpleType (T_Location l)) -> l
+            x -> error $ printf "variable %s can not be fetched, %s is not a location type" name (show $ pretty x)
           nodeSet       = mconcat [_location V.! loc | loc <- locs]
           resultCGType  = toCGType $ T_NodeSet nodeSet
           resultTU      = cgTaggedUnion resultCGType
       codeGenTagSwitch tagVal nodeSet $ \tag items -> do
         let nodeCGType  = toCGType $ T_NodeSet $ Map.singleton tag items
             nodeTU      = cgTaggedUnion nodeCGType
-        nodeAddress <- codeGenBitCast "nodeAddress" tagAddress (ptr $ tuLLVMType nodeTU)
-        nodeVal <- codeGenLocalVar "node" (cgLLVMType nodeCGType) $ Load
+        nodeAddress <- codeGenBitCast (printf "ptr_%s" . show $ PP tag) tagAddress (ptr $ tuLLVMType nodeTU)
+        nodeVal <- codeGenLocalVar (printf "node_%s" . show $ PP tag) (cgLLVMType nodeCGType) $ Load
           { volatile        = False
           , address         = nodeAddress
           , maybeAtomicity  = Nothing
@@ -324,11 +309,6 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
           , metadata        = []
           }
         (resultCGType,) <$> copyTaggedUnion nodeVal nodeTU resultTU
-
-    SStoreF val -> do
-      nodeLocation <- gets _envHeapPointer
-      codeGenStoreNode val nodeLocation
-      pure $ O locationCGType nodeLocation
 
     SUpdateF name val -> do
       nodeLocation <- codeGenVal $ Var name
@@ -346,7 +326,7 @@ codeGenStoreNode val nodeLocation = do
   codeGenTagSwitch tagVal nodeSet $ \tag items -> do
     let nodeTU = taggedUnion $ Map.singleton tag items
     nodeVal <- copyTaggedUnion tuVal valueTU nodeTU
-    nodeAddress <- codeGenBitCast "nodeAddress" nodeLocation (ptr $ tuLLVMType nodeTU)
+    nodeAddress <- codeGenBitCast (printf "ptr_%s" . show $ PP tag) nodeLocation (ptr $ tuLLVMType nodeTU)
     emit [Do Store
       { volatile        = False
       , address         = nodeAddress
@@ -362,29 +342,29 @@ codeGenCase :: Operand -> [(Alt, CG Result)] -> (CPat -> CG ()) -> CG Result
 codeGenCase opVal alts bindingGen = do
   curBlockName <- gets _currentBlockName
 
-  -- save heap pointer operand
-  heapPointer <- gets _envHeapPointer
+  let isDefault = \case
+        (Alt DefaultPat _, _) -> True
+        _ -> False
+      (defaultAlts, normalAlts) = List.partition isDefault alts
+  when (length defaultAlts > 1) $ fail "multiple default patterns"
+  let orderedAlts = defaultAlts ++ normalAlts
 
-  (altDests, altValues, altCGTypes, altHeapPointers) <- fmap unzip4 . forM alts $ \(Alt cpat _, altBody) -> do
+  (altDests, altValues, altCGTypes) <- fmap List.unzip3 . forM orderedAlts $ \(Alt cpat _, altBody) -> do
     altCPatVal <- getCPatConstant cpat
-    altEntryBlock <- uniqueName ("switch." ++ getCPatName cpat)
+    altEntryBlock <- uniqueName ("block." ++ getCPatName cpat)
     activeBlock altEntryBlock
 
-    -- restore saved heap pointer operand
-    modify' $ \env -> env {_envHeapPointer = heapPointer}
     bindingGen cpat
 
     altResult <- altBody
-    (altCGTy, altOp) <- getOperand "altResult" altResult
-    -- capture alternative's heap pointer and return along with altOp
-    altHeapPointer <- gets _envHeapPointer
+    (altCGTy, altOp) <- getOperand (printf "result.%s" $ getCPatName cpat) altResult
 
     lastAltBlock <- gets _currentBlockName
 
-    pure ((altCPatVal, altEntryBlock), (altOp, lastAltBlock, altCGTy), altCGTy, (altHeapPointer, lastAltBlock))
+    pure ((altCPatVal, altEntryBlock), (altOp, lastAltBlock, altCGTy), altCGTy)
 
   let resultCGType = commonCGType altCGTypes
-  switchExit <- uniqueName "switch.exit" -- this is the next block
+  switchExit <- uniqueName "block.exit" -- this is the next block
 
   altConvertedValues <- forM altValues $ \(altOp, lastAltBlock, altCGTy) -> do
     activeBlock lastAltBlock
@@ -397,26 +377,21 @@ codeGenCase opVal alts bindingGen = do
     pure (convertedAltOp, lastAltBlock)
 
   activeBlock curBlockName
+  let (defaultDest, normalAltDests) = if null defaultAlts
+        then (if debugMode then mkName "error_block" else switchExit, altDests)
+        else (snd $ head altDests, tail altDests)
   closeBlock $ Switch
         { operand0'   = opVal
-        , defaultDest = mkName "error_block" -- QUESTION: do we want to catch this error?
-        , dests       = altDests
+        , defaultDest = defaultDest -- QUESTION: do we want to catch this error?
+        , dests       = normalAltDests
         , metadata'   = []
         }
 
   activeBlock switchExit
 
-  -- update heap pointer with the one comes from the alternatives
-  newHeapPointer <- codeGenLocalVar heapPointerName locationLLVMType $ Phi
-    { type'           = locationLLVMType
-    , incomingValues  = {-(heapPointer, curBlockName) : -}altHeapPointers
-    , metadata        = []
-    }
-  modify' $ \env -> env {_envHeapPointer = newHeapPointer}
-
   pure . I resultCGType $ Phi
     { type'           = cgLLVMType resultCGType
-    , incomingValues  = {-(undef (cgLLVMType resultCGType), curBlockName) : -}altConvertedValues
+    , incomingValues  = altConvertedValues ++ if debugMode then [] else [(undef (cgLLVMType resultCGType), curBlockName)]
     , metadata        = []
     }
 
@@ -426,29 +401,20 @@ codeGenTagSwitch tagVal nodeSet tagAltGen | Map.size nodeSet > 1 = do
   let possibleNodes = Map.toList nodeSet
   curBlockName <- gets _currentBlockName
 
-  -- save heap pointer operand
-  heapPointer <- gets _envHeapPointer
-
-  (altDests, altValues, altCGTypes, altHeapPointers) <- fmap unzip4 . forM possibleNodes $ \(tag, items) -> do
+  (altDests, altValues, altCGTypes) <- fmap List.unzip3 . forM possibleNodes $ \(tag, items) -> do
     let cpat = TagPat tag
-    altEntryBlock <- uniqueName ("tag.switch." ++ getCPatName cpat)
+    altEntryBlock <- uniqueName ("block." ++ getCPatName cpat)
     altCPatVal <- getCPatConstant cpat
     activeBlock altEntryBlock
 
-    -- restore saved heap pointer operand
-    modify' $ \env -> env {_envHeapPointer = heapPointer}
-
     (altCGTy, altOp) <- tagAltGen tag items
-
-    -- capture alternative's heap pointer and return along with altOp
-    altHeapPointer <- gets _envHeapPointer
 
     lastAltBlock <- gets _currentBlockName
 
-    pure ((altCPatVal, altEntryBlock), (altOp, lastAltBlock, altCGTy), altCGTy, (altHeapPointer, lastAltBlock))
+    pure ((altCPatVal, altEntryBlock), (altOp, lastAltBlock, altCGTy), altCGTy)
 
   let resultCGType = commonCGType altCGTypes
-  switchExit <- uniqueName "tag.switch.exit" -- this is the next block
+  switchExit <- uniqueName "block.exit" -- this is the next block
 
   altConvertedValues <- forM altValues $ \(altOp, lastAltBlock, altCGTy) -> do
     activeBlock lastAltBlock
@@ -463,24 +429,16 @@ codeGenTagSwitch tagVal nodeSet tagAltGen | Map.size nodeSet > 1 = do
   activeBlock curBlockName
   closeBlock $ Switch
     { operand0'   = tagVal
-    , defaultDest = mkName "error_block" -- QUESTION: do we want to catch this error?
+    , defaultDest = if debugMode then mkName "error_block" else switchExit
     , dests       = altDests
     , metadata'   = []
     }
 
   activeBlock switchExit
 
-  -- update heap pointer with the one comes from the alternatives
-  newHeapPointer <- codeGenLocalVar heapPointerName locationLLVMType $ Phi
-    { type'           = locationLLVMType
-    , incomingValues  = {-(heapPointer, curBlockName) : -}altHeapPointers
-    , metadata        = []
-    }
-  modify' $ \env -> env {_envHeapPointer = newHeapPointer}
-
   pure . I resultCGType $ Phi
     { type'           = cgLLVMType resultCGType
-    , incomingValues  = {-(undef (cgLLVMType resultCGType), curBlockName) : -}altConvertedValues
+    , incomingValues  = altConvertedValues ++ if debugMode then [] else [(undef (cgLLVMType resultCGType), curBlockName)]
     , metadata        = []
     }
 
@@ -489,30 +447,37 @@ codeGenTagSwitch tagVal nodeSet tagAltGen | [(tag, items)] <- Map.toList nodeSet
 
 -- heap pointer related functions
 
-withHeapPointer :: LLVM.Type -> LLVM.Type
-withHeapPointer ty = StructureType
-  { isPacked      = True
-  , elementTypes  = [locationLLVMType, ty]
-  }
-
-codeGenIncreaseHeapPointer :: String -> CG ()
+codeGenIncreaseHeapPointer :: String -> CG Operand -- TODO
 codeGenIncreaseHeapPointer name = do
-  -- increase heap pointer
+  -- increase heap pointer and return the old value which points to the first free block
   CG_SimpleType {cgType = T_SimpleType (T_Location [loc])} <- getVarType name
   nodeSet <- use $ envTypeEnv.location.ix loc
-  heapPointer0 <- gets _envHeapPointer
 
   let tuPtrTy = ptr $ tuLLVMType $ taggedUnion nodeSet
-  heapPointer1 <- codeGenBitCast heapPointerName heapPointer0 tuPtrTy
-  newHeapPointer0 <- codeGenLocalVar heapPointerName tuPtrTy $ AST.GetElementPtr
+  tuSizePtr <- codeGenLocalVar "alloc_bytes" tuPtrTy $ AST.GetElementPtr
     { inBounds  = True
-    , address   = heapPointer1
+    , address   = ConstantOperand $ Null tuPtrTy
     , indices   = [ConstantOperand $ C.Int 32 1]
     , metadata  = []
     }
-  -- cast to tag pointer ; generic heap pointer type
-  newHeapPointer <- codeGenBitCast heapPointerName newHeapPointer0 locationLLVMType
-  modify' $ \env -> env {_envHeapPointer = newHeapPointer}
+  tuSizeInt <- codeGenLocalVar "alloc_bytes" i64 $ AST.PtrToInt
+    { operand0  = tuSizePtr
+    , type'     = i64
+    , metadata  = []
+    }
+  heapInt <- codeGenLocalVar "new_node_ptr" i64 $ AST.AtomicRMW
+    { volatile      = False
+    , rmwOperation  = RMWOperation.Add
+    , address       = ConstantOperand $ GlobalReference (ptr i64) (mkName heapPointerName)
+    , value         = tuSizeInt
+    , atomicity     = (System, Monotonic)
+    , metadata      = []
+    }
+  codeGenLocalVar "new_node_ptr" (ptr i64) $ AST.IntToPtr
+    { operand0  = heapInt
+    , type'     = ptr i64
+    , metadata  = []
+    }
 
 external :: Type -> AST.Name -> [(Type, AST.Name)] -> CG ()
 external retty label argtys = modify' (\env@Env{..} -> env {_envDefinitions = def : _envDefinitions}) where

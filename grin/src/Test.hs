@@ -19,7 +19,7 @@ import Data.Bifunctor
 import Data.Functor.Infix
 import Data.Functor.Foldable
 import Data.List ((\\))
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, maybeToList)
 import Data.Semigroup
 import qualified Data.Text as Text
 import GHC.Generics
@@ -115,7 +115,7 @@ firstBindR1 :: TestExpContext
 firstBindR1 = ("first bind right", second tr) where
   tr (exprText -> e) = [expr|
       $e
-      pure ()
+      _prim_int_print 1
     |]
 
 changeLast :: Exp -> Exp -> Exp
@@ -130,15 +130,15 @@ firstBindR = ("first bind right", second tr) where
 middleBindR :: TestExpContext
 middleBindR = ("middle bind right", second tr) where
   tr (exprText -> e) = [expr|
-      pure ()
+      _prim_int_print 42
       $e
-      pure ()
+      _prim_int_print 1
     |]
 
 lastBindR :: TestExpContext
 lastBindR = ("last bind right", second tr) where
   tr (exprText -> e) = [expr|
-      pure ()
+      _prim_int_print 42
       $e
     |]
 
@@ -147,45 +147,45 @@ bindL (pack . show -> n) = ("bind left", second tr) where
   tr (exprText -> e) = [expr|
       fb$n <- do
         $e
-      pure ()
+      _prim_int_print 1
     |]
 
 lastBindL :: Int -> TestExpContext
 lastBindL (pack . show -> n) = ("last bind left", second tr) where
   tr (exprText -> e) = [expr|
       md$n <- do
-        pure ()
+        _prim_int_print 42
         $e
-      pure ()
+      _prim_int_print 1
     |]
 
 firstAlt :: TestExpContext
 firstAlt = ("first alt", second tr) where
   tr (exprText -> e) = [expr|
       case 1 of
-        1 -> pure ()
+        1 -> _prim_int_print 42
              $e
-        2 -> pure ()
-        3 -> pure ()
+        2 -> _prim_int_print 1
+        3 -> _prim_int_print 1
     |]
 
 middleAlt :: TestExpContext
 middleAlt = ("middle alt", second tr) where
   tr (exprText -> e) = [expr|
       case 1 of
-        1 -> pure ()
-        2 -> pure ()
+        1 -> _prim_int_print 1
+        2 -> _prim_int_print 1
              $e
-        3 -> pure ()
+        3 -> _prim_int_print 1
     |]
 
 lastAlt :: TestExpContext
 lastAlt = ("last alt", second tr) where
   tr (exprText -> e) = [expr|
       case 1 of
-        1 -> pure ()
-        2 -> pure ()
-        3 -> pure ()
+        1 -> _prim_int_print 1
+        2 -> _prim_int_print 1
+        3 -> _prim_int_print 1
              $e
     |]
 
@@ -236,6 +236,7 @@ instance Arbitrary CPat where
     [ NodePat <$> arbitrary <*> (G.unName <$$> listOf1 arbitrary)
     , TagPat  <$> arbitrary
     , LitPat  <$> arbitrary
+    , pure DefaultPat
     ]
 
 instance Arbitrary Tag where
@@ -756,7 +757,8 @@ gCase eff t = tryout
   , do t'   <- tryout [simpleType, definedAdt]
        val  <- gValue t'
        alts <- gAlts eff (Just val) t' t
-       pure $ G.ECase val $ NonEmpty alts
+       mDefAlt <- moneof [pure Nothing, (Just . G.Alt DefaultPat <$> (solve (Exp eff t)))]
+       pure $ G.ECase val $ NonEmpty (alts ++ maybeToList mDefAlt)
   ]
 
 -- TODO: Effects

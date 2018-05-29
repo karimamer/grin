@@ -35,6 +35,9 @@ data Type
                   }
   deriving (Eq, Ord, Show)
 
+unit_t :: Type
+unit_t = T_SimpleType T_Unit
+
 int64_t :: Type
 int64_t = T_SimpleType T_Int64
 
@@ -84,6 +87,9 @@ emptyTypeEnv = TypeEnv mempty mempty mempty
 newVar :: Name -> Type -> Endo TypeEnv
 newVar n t = Endo (variable %~ (Map.insert n t))
 
+newFun :: Name -> Type -> [Type] -> Endo TypeEnv
+newFun n t a = Endo (function %~ (Map.insert n (t, Vector.fromList a)))
+
 create :: Endo TypeEnv -> TypeEnv
 create (Endo c) = c emptyTypeEnv
 
@@ -93,6 +99,11 @@ extend t (Endo c) = c t
 variableType :: TypeEnv -> Name -> Type
 variableType TypeEnv{..} name = case Map.lookup name _variable of
   Nothing -> error $ printf "variable %s is missing from type environment" name
+  Just t -> t
+
+functionType :: TypeEnv -> Name -> (Type, Vector Type)
+functionType TypeEnv{..} name = case Map.lookup name _function of
+  Nothing -> error $ printf "function %s is missing from type environment" name
   Just t -> t
 
 typeOfLit :: Lit -> Type
@@ -116,5 +127,19 @@ typeOfVal = \case
 
   Unit    -> T_SimpleType T_Unit
   Lit lit -> typeOfLit lit
+
+  bad -> error (show bad)
+
+typeOfValTE :: TypeEnv -> Val -> Type
+typeOfValTE typeEnv = \case
+  ConstTagNode  tag simpleVals ->
+    T_NodeSet
+      $ Map.singleton tag
+      $ Vector.fromList
+      $ map ((\(T_SimpleType t) -> t) . typeOfValTE typeEnv) simpleVals
+
+  Unit      -> T_SimpleType T_Unit
+  Lit lit   -> typeOfLit lit
+  Var name  -> variableType typeEnv name
 
   bad -> error (show bad)

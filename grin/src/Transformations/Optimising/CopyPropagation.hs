@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase, TupleSections #-}
+{-# LANGUAGE LambdaCase, TupleSections, ViewPatterns #-}
 module Transformations.Optimising.CopyPropagation where
 
 import Text.Printf
@@ -9,34 +9,50 @@ import Grin
 import Pretty
 import Transformations.Util
 
-type Env = (Map Name Name, Map Val Val)
+{-
+  NOTE:
+    Do not propagate literal values because literals are not used for optimisations. (GRIN is not a supercompiler)
+    Only propagates variables. It does not cause performance penalty, LLVM will optimise the code further.
+-}
+
+type Env = (Map Val Val, Map Name Name)
 
 copyPropagation :: Exp -> Exp
-copyPropagation e = hylo skipUnit builder (mempty, e) where
+copyPropagation e = hylo folder builder (mempty, e) where
 
   builder :: (Env, Exp) -> ExpF (Env, Exp)
-  builder (env@(nameEnv, valEnv), exp) = let e = substVals valEnv . substVarRefExp nameEnv $ exp in case e of
-    -- right unit law
-    EBind leftExp valIn (SReturn valOut) | valIn == valOut -> (env,) <$> EBindF (SReturn Unit) Unit leftExp
-
+  builder (env@(valEnv, nameEnv), exp) = let e = substVarRefExp nameEnv $ exp in case e of
     -- left unit law
-    EBind (SReturn val) lpat rightExp | Just newEnv <- unify env lpat val -> (mappend env newEnv,) <$> EBindF (SReturn Unit) Unit rightExp
+    EBind (SReturn val) lpat rightExp
+      | newEnv <- env `mappend` unify env val lpat
+      , reducedVal <- substNamesVal nameEnv val
+      , constVal <- subst valEnv reducedVal
+      -> case (lpat, constVal) of
+        (ConstTagNode lpatTag lpatArgs, ConstTagNode valTag valArgs)
+          | lpatTag == valTag
+          , bindChain <- foldr (genBind env) rightExp $ zip valArgs lpatArgs
+          -> (newEnv,) <$> project (EBind (SReturn Unit) Unit bindChain)
+        _ -> (newEnv,) <$> project (genBind env (reducedVal, lpat) rightExp)
 
     _ -> (env,) <$> project e
 
-  -- HINT: unify controls which (lpat/val) cases should be handled by copy propagation
-  unify :: Env -> LPat -> Val -> Maybe Env
-  unify env@(nameEnv, valEnv) lpat val = case (lpat, val) of
-    (ConstTagNode lpatTag lpatArgs, ConstTagNode valTag valArgs) ->
-      if lpatTag /= valTag
-        then error $ printf "mismatching tags, lpat: %s val: %s" (show $ pretty lpatTag) (show $ pretty valTag)
-        else mconcat $ zipWith (unify env) lpatArgs valArgs
+  unify :: Env -> Val -> LPat -> Env
+  unify env@(valEnv, nameEnv) (substNamesVal nameEnv -> val) lpat = case (lpat, val) of
+    (ConstTagNode lpatTag lpatArgs, ConstTagNode valTag valArgs)
+      | lpatTag == valTag         -> mconcat $ zipWith (unify env) valArgs lpatArgs
+    (Var lpatVar, Var valVar)     -> (mempty, Map.singleton lpatVar valVar)
+    (Var lpatVar, _)              -> (Map.singleton lpat val, mempty)
+    _ -> mempty -- LPat: unit, lit, tag
 
-    (Var{}, ConstTagNode{})   -> Just (mempty, Map.singleton lpat $ subst valEnv val)         -- update val env
-    (Var lpatVar, Var valVar) -> Just (Map.singleton lpatVar $ subst nameEnv valVar, mempty)  -- update name env
+  genBind :: Env -> (Val, LPat) -> Exp -> Exp
+  genBind env@(valEnv, nameEnv) (val@(substValsVal valEnv -> constVal), lpat) exp = case lpat of
+    ValTag{}        -> EBind (SReturn constVal) lpat exp
+    Lit{}           -> EBind (SReturn constVal) lpat exp
+    _               -> EBind (SReturn val) lpat exp
 
-    --  case A: Unit, Lit
-    _ | lpat == val && isBasicValue lpat -> Just mempty -- HINT: nothing to do
-
-    -- bypass otherwise
-    _ -> Nothing
+  -- QUESTION: does this belong here? or to dead variable elimination / constant propagation?
+  folder :: ExpF Exp -> Exp
+  folder = \case
+    -- right unit law
+    EBindF (SReturn val) lpat rightExp | val == lpat -> rightExp
+    exp -> embed exp

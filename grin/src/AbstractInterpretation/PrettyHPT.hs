@@ -52,7 +52,7 @@ instance Pretty Computer where
 
 instance Pretty R.SimpleType where
   pretty = \case
-    R.T_Location l  -> cyan . int . succ $ fromIntegral l
+    R.T_Location l  -> cyan . int $ fromIntegral l
     ty              -> red $ text $ show ty
 
 prettyHPTNode :: (Tag, Vector (Set R.SimpleType)) -> Doc
@@ -69,7 +69,7 @@ instance Pretty R.TypeSet where
 
 instance Pretty R.HPTResult where
   pretty R.HPTResult{..} = vsep
-    [ yellow (text "Heap") <$$> indent 4 (prettyKeyValue $ zip [(1 :: Int)..] $ V.toList _memory)
+    [ yellow (text "Heap") <$$> indent 4 (prettyKeyValue $ zip [(0 :: Int)..] $ V.toList _memory)
     , yellow (text "Env") <$$> indent 4 (prettyKeyValue $ Map.toList  _register)
     , yellow (text "Function") <$$> indent 4 (vsep $ map prettyHPTFunction $ Map.toList _function)
     ]

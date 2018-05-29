@@ -59,7 +59,7 @@ instance Pretty Exp where
       SUpdateF name val       -> keywordR "update" <+> text name <+> pretty val
       SBlockF exp             -> text "do" <$$> indent 2 (pretty exp)
       -- Alt
-      AltF cpat exp     -> pretty cpat <+> text "->" <+> align (pretty exp)
+      AltF cpat exp     -> pretty cpat <+> text "->" <$$> indent 2 (pretty exp)
 
 instance Pretty Val where
   pretty = \case
@@ -86,12 +86,13 @@ instance Pretty CPat where
     NodePat tag vars  -> parens $ hsep (pretty tag : map text vars)
     TagPat  tag       -> pretty tag
     LitPat  lit       -> pretty lit
+    DefaultPat        -> keyword "#default"
 
 instance Pretty TagType where
   pretty = green . \case
-    C -> text "C"
-    F -> text "F"
-    P -> text "P"
+    C   -> text "C"
+    F   -> text "F"
+    P i -> text "P" <> int i
 
 instance Pretty Tag where
   pretty (Tag tagtype name) = pretty tagtype <> text name

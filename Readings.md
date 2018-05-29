@@ -2,15 +2,25 @@
 
 http://www.timphilipwilliams.com/posts/2013-01-16-fixing-gadts.html
 
-# GHC core getting started
+# GHC
+### Core getting started
 
 - [Dive into GHC: Pipeline](http://www.stephendiehl.com/posts/ghc_01.html)
 - [Dive into GHC: Intermediate Forms](http://www.stephendiehl.com/posts/ghc_02.html)
 - [Dive into GHC: Targeting Core](http://www.stephendiehl.com/posts/ghc_03.html)
 
+### Internals
+
+- [GHC (STG,Cmm,asm) illustrated for hardware persons](http://takenobu-hs.github.io/downloads/haskell_ghc_illustrated.pdf)
+- [GHC Simplifier: Compilation by transformation for non-strict functional languages](https://www.microsoft.com/en-us/research/publication/compilation-transformation-non-strict-functional-languages)
+
+
 # LLVM-HS
 
 - [Calling External Functions from JIT-compiled LLVM Modules using llvm-hs](https://purelyfunctional.org/posts/2018-04-02-llvm-hs-jit-external-function.html)
+
+# GRIN
+- [Sharing Analysis + EVAL inlining + Unboxing = Deforestation](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.48.6217&rep=rep1&type=pdf)
 
 # Recursion schemes
 
@@ -22,7 +32,8 @@ https://github.com/passy/awesome-recursion-schemes
 
 Limits of recusrion schemes? Maybe a hylo can help to implement the list filter?
 
--  https://stackoverflow.com/questions/18421926/list-filter-using-an-anamorphism
+- https://stackoverflow.com/questions/18421926/list-filter-using-an-anamorphism
+- http://newartisans.com/2018/04/win-for-recursion-schemes
 
 ## Articles
 
@@ -38,6 +49,8 @@ Limits of recusrion schemes? Maybe a hylo can help to implement the list filter?
 - https://stackoverflow.com/questions/36851766/histomorphisms-zygomorphisms-and-futumorphisms-specialised-to-lists
 
 ## Cheat Sheet
+
+http://b-studios.de/blog/2016/02/21/the-hitchhikers-guide-to-morphisms/
 
 ### Recursion schemes
 

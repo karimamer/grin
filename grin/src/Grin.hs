@@ -15,7 +15,13 @@ import Data.Text (Text)
 import Data.List (isPrefixOf)
 import Lens.Micro.Platform
 import Data.Maybe
+import qualified Data.ByteString.Short as B
 
+data Name2
+  = Name        B.ShortByteString
+  | DerivedName B.ShortByteString Int
+  | NewName     Name2 Int -- Block scope with shadowing support
+  deriving (Ord, Eq, Show)
 
 type Name = String
 
@@ -125,8 +131,8 @@ data Lit
 data CPat
   = NodePat Tag [Name]  -- HIGH level GRIN
   | LitPat  Lit         -- HIGH level GRIN
+  | DefaultPat          -- HIGH level GRIN
   | TagPat  Tag
-  | DefaultPat
   deriving (Generic, NFData, Eq, Show, Ord)
 
 isBasicCPat :: CPat -> Bool
@@ -138,10 +144,11 @@ isBasicCPat = \case
 instance FoldNames CPat where
   foldNames f = \case
     NodePat _ names -> mconcat (map f names)
-    TagPat _ -> mempty
-    LitPat _ -> mempty
+    TagPat _    -> mempty
+    LitPat _    -> mempty
+    DefaultPat  -> mempty
 
-data TagType = C | F | P
+data TagType = C | F | P Int {-missing parameter count-}
   deriving (Generic, NFData, Eq, Ord, Show)
 
 data Tag = Tag
@@ -284,3 +291,15 @@ isConstant = cata $ \case
   LitF lit                  -> True
   _                         -> False
 
+hasConstant :: Val -> Bool
+hasConstant = cata $ \case
+  ValTagF{} -> True
+  UnitF     -> True
+  LitF{}    -> True
+  v         -> or v
+
+isAllVar :: Val -> Bool
+isAllVar = cata $ \case
+  ConstTagNodeF _ params  -> and params
+  VarF{}                  -> True
+  _                       -> False

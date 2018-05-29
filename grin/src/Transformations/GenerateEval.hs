@@ -1,56 +1,44 @@
 {-# LANGUAGE LambdaCase #-}
 module Transformations.GenerateEval where
 
-import Data.Set (Set, singleton, toList)
-import qualified Data.Set as Set
-import Data.Maybe
-import qualified Data.Foldable
-
-import Data.Functor.Foldable as Foldable
-
+import Text.Printf
 import Grin
 
-
+{-
+  done - collect all functions + arity
+  done - generate eval
+  done - generate apply
+-}
 generateEval :: Program -> Program
-generateEval program@(Program defs) = Program $ defs ++ maybe [] pure (evalDef (collectTagInfo program))
-generateEval _ = error "generateEval - Program required"
+generateEval = \case
+  Program defs -> Program $ eval defs : apply defs : defs where
+  _ -> error "program expected"
 
-evalDef :: Set Tag -> Maybe Def
-evalDef tagInfo | not (Set.null tagInfo) = Just $ Def "generated_eval" ["p"] $
+eval :: [Def] -> Def
+eval defs = Def "eval" ["p"] $
   EBind (SFetch "p") (Var "v") $
-  ECase (Var "v") $ mapMaybe tagAlt $ toList tagInfo where
-    {- e.g.
-        case v of
-          (CInt x')     -> return v
-          (Fupto a b)   -> w <- upto a b
-                           update p w
-                           return w
-    -}
-    -- TODO: create GRIN AST builder EDSL
-    tagAlt tag@(Tag C name) = Just $ Alt (NodePat tag (newNames 0 {-TODO-})) $ SReturn (Var "v")
-    tagAlt tag@(Tag F name) = Just $ Alt (NodePat tag names) $
-                                      EBind (SApp name $ map Var names) (Var "w") $
-                                      EBind (SUpdate "p" $ Var "w")      Unit $
-                                      SReturn $ Var "w"
-                                    where names = newNames 0 {-TODO-}
+  ECase (Var "v") $ defaultAlt : (map funAlt . filter f $ defs) where
+    defaultAlt                = Alt DefaultPat (SReturn $ Var "v")
+    funAlt (Def name args _) = Alt (NodePat (Tag F name) argNames) $
+                                      EBind (SApp name $ map Var argNames) (Var whnf) $
+                                      EBind (SUpdate "p" $ Var whnf) Unit $
+                                      SReturn $ Var whnf
+                                    where
+                                      whnf      = printf "%s.whnf" name
+                                      argNames  = map (printf "%s.%d" name) [1..length args]
+    f (Def name _ _) = name `notElem` ["int_print", "grinMain"] -- TODO: proper filtering
 
-    tagAlt (Tag P _) = Nothing
-
-    newNames n = ['_' : show i | i <- [1..n]]
-evalDef _ = Nothing
-
-collectTagInfo :: Exp -> Set Tag
-collectTagInfo = cata folder where
-  folder = \case
-    -- Exp
-    ECaseF val alts -> mconcat $ add val : alts
-    -- Simple Exp
-    SReturnF  val   -> add val
-    SStoreF   val   -> add val
-    SUpdateF  _ val -> add val
-    e -> Data.Foldable.fold e
-
-  add = \case
-    ConstTagNode (Tag tagtype name) args -> singleton (Tag tagtype name)
-    ValTag tag          -> singleton tag
-    _                   -> mempty
+apply :: [Def] -> Def
+apply defs = Def "apply" ["f", "x"] $
+  ECase (Var "f") $ concatMap funAlts $ filter f defs where
+    f (Def name args _) = name `notElem` ["int_print", "grinMain"] && length args > 0 -- TODO: proper filtering
+    funAlts def@(Def _ args _) = map (funAlt def) [0..length args-1]
+    funAlt (Def name args _) i
+      | i == n-1  = Alt (NodePat (Tag (P missingCount) name) argNames) $
+                          SApp name $ map Var argNames ++ [Var "x"]
+      | otherwise = Alt (NodePat (Tag (P missingCount) name) argNames) $
+                          SReturn $ ConstTagNode (Tag (P $ pred missingCount) name) $ map Var argNames ++ [Var "x"]
+      where
+        argNames      = map (printf "%s%d.%d" name missingCount) [1..i]
+        n             = length args
+        missingCount  = length args - i

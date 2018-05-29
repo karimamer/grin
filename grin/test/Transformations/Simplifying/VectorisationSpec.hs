@@ -48,6 +48,7 @@ spec = do
               l1         <- store (v0 v1 v2)
               pure 1
             |]
+      pending
       vectorisation hpt (ctx before) `sameAs` (ctx after)
 
 runTests :: IO ()

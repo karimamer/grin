@@ -4,14 +4,9 @@ module Transformations.Optimising.TrivialCaseEliminationSpec where
 import Transformations.Optimising.TrivialCaseElimination
 
 import Test.Hspec
-import Grin
 import GrinTH
 import Test hiding (newVar)
 import Assertions
-import ParseGrin
-import TypeEnv
-import Data.Monoid
-import Control.Arrow
 
 
 runTests :: IO ()
@@ -26,7 +21,32 @@ spec = do
             (Ffun a1 a2 a3) -> fun a1 a2 a3
         |]
       let after = [expr|
-          (Ffun a1 a2 a3) <- pure v
-          fun a1 a2 a3
+          do
+            (Ffun a1 a2 a3) <- pure v
+            fun a1 a2 a3
+        |]
+      trivialCaseElimination (ctx before) `sameAs` (ctx after)
+
+    it "bypass" $ do
+      let before = [expr|
+          case v of
+            (Ffun1 a1 a2 a3) -> fun1 a1 a2 a3
+            #default -> pure 2
+        |]
+      let after = [expr|
+          case v of
+            (Ffun1 a1 a2 a3) -> fun1 a1 a2 a3
+            #default -> pure 2
+        |]
+      trivialCaseElimination (ctx before) `sameAs` (ctx after)
+
+    it "default alternative" $ do
+      let before = [expr|
+          case v of
+            #default -> pure 2
+        |]
+      let after = [expr|
+          do
+            pure 2
         |]
       trivialCaseElimination (ctx before) `sameAs` (ctx after)

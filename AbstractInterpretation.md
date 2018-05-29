@@ -13,8 +13,11 @@ method: compiled abstract interpretation
 - tag:            count of distinct tags
 
 ## articles
--  https://en.wikipedia.org/wiki/Data-flow_analysis
--  https://en.wikipedia.org/wiki/Abstract_interpretation
+- [Abstracting Abstract Machines by David Van Horn and Matthew Might](https://vimeo.com/16539100) (video)
+- [Systematic abstraction of abstract machines](http://matt.might.net/papers/vanhorn2012abstract.pdf)
+- [Abstracting Definitional Interpreters](https://arxiv.org/pdf/1707.04755.pdf)
+- https://en.wikipedia.org/wiki/Data-flow_analysis
+- https://en.wikipedia.org/wiki/Abstract_interpretation
 
 ### search for: abstract compilation
 -  http://www.iro.umontreal.ca/~feeley/papers/BoucherFeeleyCC96.pdf ; Abstract compilation: A new implementation paradigm for static analysis
@@ -98,3 +101,33 @@ Conteptually the HPT analysis is done like the generic eval function was inlined
   - HPT IR LLVM
   - HPT IR pure
   - HPT abstract interpreter pure (with inline support)
+
+## Compiled Abstract Interpretation
+
+#### Abstract Machine
+
+- abstract value: _set of (simple type | node type | location)_
+- machine state:
+  - finite set of registers: _register name -> abstract value_
+  - bounded (abstract) memory == finite set of memory locations: _location -> abstract value_
+
+#### Compile: Grin to Abstract Machine
+
+The basic idea is of abstract interpretation is to map each Grin variable to an abstract machine register which holds an abstract value.
+An abstract value describes a value domain which can be interpreted as type.
+The abstract value supports only a single operation: `union`. This means it can only be extended and never can be shrinked.
+The abstract value can be extended by a constant value (e.g. simple type, node type, location) or another abstract value.
+
+The Grin memory operations (`store`, `update`, `fetch`) are altered to operate on the abstract machine's finite memory.
+The mapping is done using the `store` operation. A unique memory location is assigned for each specific `store` operation that will be reused for the whole (abstract) program lifetime.
+
+For each Grin function a set of abstract machine registers are assigned to hold the function's result type and argument type.
+These registers are filled by the function body (return type) and the function callers (argument type).
+
+The primitive functions does not have function body. Their return type must be known (hard coded) to be able to fill the register that holds the return type.
+For unknown primitive functions the return type will never be filled, which can affect other parts of the program via transitive dependency. (e.g. avoid execution)
+
+The initially the abstract machine is empty, where the values of registers and memory locations are empty.
+The machine state get filled gradually during the abstract interpretation.
+It is possible that some registers or memory locations will remain untouched during the abstract interpretation.
+These parts of the original program is statically know to be unused, it is dead code or dead parameter.

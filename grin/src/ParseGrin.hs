@@ -8,7 +8,6 @@ import Control.Monad (void, mzero)
 import Text.Megaparsec
 import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Char as C
-import Text.Show.Pretty (pPrint)
 import qualified Data.Set as Set
 import Grin
 
@@ -38,13 +37,14 @@ kw w = lexeme $ string w
 
 op w = L.symbol sc' w
 
+-- TODO: unify var and con + support quotted syntax which allow any character
 var :: Parser String
-var = try $ lexeme ((:) <$> lowerChar <*> many (alphaNumChar <|> oneOf "'_")) >>= \x -> case Set.member x keywords of
+var = try $ lexeme ((:) <$> lowerChar <*> many (alphaNumChar <|> oneOf "'_.:!@{}$-")) >>= \x -> case Set.member x keywords of
   True -> fail $ "keyword: " ++ x
   False -> return x
 
 con :: Parser String
-con = lexeme $ some (alphaNumChar)
+con = lexeme $ some (alphaNumChar <|> oneOf "_.{}")
 
 integer = lexeme L.decimal
 signedInteger = L.signed sc' integer
@@ -58,7 +58,6 @@ def = Def <$> try (L.indentGuard sc EQ pos1 *> var) <*> many var <* op "=" <*> (
 
 expr i = L.indentGuard sc EQ i >>
   try ((\pat e b -> EBind e pat b) <$> (try (value <* op "<-") <|> pure Unit) <*> simpleExp i <*> expr i ) <|>
-  ECase <$ kw "case" <*> value <* kw "of" <*> (L.indentGuard sc GT i >>= some . alternative) <|>
   ifThenElse i <|>
   simpleExp i
 
@@ -75,6 +74,7 @@ ifThenElse i = do
                    ]
 
 simpleExp i = SReturn <$ kw "pure" <*> value <|>
+              ECase <$ kw "case" <*> value <* kw "of" <*> (L.indentGuard sc GT i >>= some . alternative) <|>
               SStore <$ kw "store" <*> satisfyM nodeOrVar value <|>
               SFetchI <$ kw "fetch" <*> var <*> optional (between (char '[') (char ']') $ fromIntegral <$> integer) <|>
               SUpdate <$ kw "update" <*> var <*> satisfyM nodeOrVar value <|>
@@ -92,12 +92,13 @@ primNameOrDefName = ('_':) <$ char '_' <*> var <|> var
 alternative i = Alt <$> try (L.indentGuard sc EQ i *> altPat) <* op "->" <*> (L.indentGuard sc GT i >>= expr)
 
 altPat = parens (NodePat <$> tag <*> many var) <|>
+         DefaultPat <$ kw "#default" <|>
          TagPat <$> tag <|>
          LitPat <$> literal
 
 tag = Tag C <$ char 'C' <*> con <|>
       Tag F <$ char 'F' <*> var <|>
-      Tag P <$ char 'P' <*> (var <|> con)
+      Tag <$> (P <$ char 'P' <*> L.decimal) <*> (var <|> con)
 
 simpleValue = Lit <$> literal <|>
               Var <$> var
@@ -128,10 +129,10 @@ parseGrin :: String -> String -> Either (ParseError Char Void) Exp
 parseGrin filename content = runParser grinModule filename content
 
 parseProg :: String -> Exp
-parseProg = either (error . show) id . parseGrin ""
+parseProg src = either (error . parseErrorPretty' src) id . parseGrin "" $ src
 
 parseDef :: String -> Exp
-parseDef = either (error . show) id . runParser def ""
+parseDef src = either (error . parseErrorPretty' src) id . runParser def "" $ src
 
 parseExpr :: String -> Exp
-parseExpr = either (error . show) id . runParser (expr pos1) ""
+parseExpr src = either (error . parseErrorPretty' src) id . runParser (expr pos1) "" $ src

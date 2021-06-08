@@ -15,87 +15,195 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
+  default-extensions:  OverloadedStrings
   exposed-modules:
-    Check
-    Eval
-    Grin
-    GrinTH
-    TypeEnv
-    TypeCheck
-    Optimizations
-    Pretty
-    PrettyLint
-    PrimOps
-    ParseGrin
-    Reducer.PrimOps
-    Reducer.Pure
+    AbstractInterpretation.ExtendedSyntax.IR
+    AbstractInterpretation.ExtendedSyntax.PrettyIR
+    AbstractInterpretation.ExtendedSyntax.BinaryIR
+    AbstractInterpretation.ExtendedSyntax.BinaryResult
+    AbstractInterpretation.ExtendedSyntax.ReduceCpp
+    AbstractInterpretation.ExtendedSyntax.Reduce
+    AbstractInterpretation.ExtendedSyntax.Util
+    AbstractInterpretation.ExtendedSyntax.OptimiseAbstractProgram
+    AbstractInterpretation.ExtendedSyntax.CreatedBy.Result
+    AbstractInterpretation.ExtendedSyntax.CreatedBy.Readback
+    AbstractInterpretation.ExtendedSyntax.CreatedBy.Util
+    AbstractInterpretation.ExtendedSyntax.CreatedBy.CodeGen
+    AbstractInterpretation.ExtendedSyntax.CreatedBy.CodeGenBase
+    AbstractInterpretation.ExtendedSyntax.CreatedBy.Pretty
+    AbstractInterpretation.ExtendedSyntax.EffectTracking.CodeGenBase
+    AbstractInterpretation.ExtendedSyntax.EffectTracking.CodeGen
+    AbstractInterpretation.ExtendedSyntax.EffectTracking.Pretty
+    AbstractInterpretation.ExtendedSyntax.EffectTracking.Result
+    AbstractInterpretation.ExtendedSyntax.HeapPointsTo.CodeGenBase
+    AbstractInterpretation.ExtendedSyntax.HeapPointsTo.CodeGen
+    AbstractInterpretation.ExtendedSyntax.HeapPointsTo.Pretty
+    AbstractInterpretation.ExtendedSyntax.HeapPointsTo.Result
+    AbstractInterpretation.ExtendedSyntax.LiveVariable.CodeGen
+    AbstractInterpretation.ExtendedSyntax.LiveVariable.CodeGenBase
+    AbstractInterpretation.ExtendedSyntax.LiveVariable.Result
+    AbstractInterpretation.ExtendedSyntax.LiveVariable.Pretty
+    AbstractInterpretation.ExtendedSyntax.Sharing.CodeGen
+    AbstractInterpretation.ExtendedSyntax.Sharing.Pretty
+    AbstractInterpretation.ExtendedSyntax.Sharing.Result
+
+    AbstractInterpretation.CreatedBy.Result
+    AbstractInterpretation.CreatedBy.Readback
+    AbstractInterpretation.CreatedBy.Util
+    AbstractInterpretation.CreatedBy.CodeGen
+    AbstractInterpretation.CreatedBy.CodeGenBase
+    AbstractInterpretation.CreatedBy.Pretty
+    AbstractInterpretation.EffectTracking.Result
+    AbstractInterpretation.EffectTracking.CodeGen
+    AbstractInterpretation.EffectTracking.CodeGenBase
+    AbstractInterpretation.EffectTracking.Pretty
+    AbstractInterpretation.HeapPointsTo.CodeGen
+    AbstractInterpretation.HeapPointsTo.CodeGenBase
+    AbstractInterpretation.HeapPointsTo.Pretty
+    AbstractInterpretation.HeapPointsTo.Result
+    AbstractInterpretation.Sharing.CodeGen
+    AbstractInterpretation.Sharing.Result
+    AbstractInterpretation.Sharing.Pretty
+    AbstractInterpretation.LiveVariable.CodeGen
+    AbstractInterpretation.LiveVariable.CodeGenBase
+    AbstractInterpretation.LiveVariable.Result
+    AbstractInterpretation.LiveVariable.Pretty
+    AbstractInterpretation.IR
+    AbstractInterpretation.BinaryIR
+    AbstractInterpretation.PrettyIR
+    AbstractInterpretation.BinaryResult
+    AbstractInterpretation.ReduceCpp
+    AbstractInterpretation.Reduce
+    AbstractInterpretation.Util
+    AbstractInterpretation.OptimiseAbstractProgram
+    AbstractInterpretation.Model
+    Grin.Grin
+    Grin.Syntax
+    Grin.SyntaxDefs
+    Grin.TH
+    Grin.Lint
+    Grin.Parse
+    Grin.Parse.AST
+    Grin.Parse.Basic
+    Grin.Parse.TypeEnv
+    Grin.Pretty
+    Grin.PrettyLint
+    Grin.Statistics
+    Grin.TypeCheck
+    Grin.TypeEnv
+    Grin.TypeEnvDefs
+    Grin.EffectMap
+    Grin.PrimOpsPrelude
+    Grin.Nametable
+    Grin.Research
+    Grin.ExtendedSyntax.Syntax
+    Grin.ExtendedSyntax.SyntaxDefs
+    Grin.ExtendedSyntax.Grin
+    Grin.ExtendedSyntax.EffectMap
+    Grin.ExtendedSyntax.Lint
+    Grin.ExtendedSyntax.Nametable
+    Grin.ExtendedSyntax.Parse
+    Grin.ExtendedSyntax.Parse.AST
+    Grin.ExtendedSyntax.Parse.Basic
+    Grin.ExtendedSyntax.Parse.TypeEnv
+    Grin.ExtendedSyntax.Pretty
+    Grin.ExtendedSyntax.PrettyLint
+    Grin.ExtendedSyntax.PrimOpsPrelude
+    Grin.ExtendedSyntax.Statistics
+    Grin.ExtendedSyntax.TH
+    Grin.ExtendedSyntax.TypeCheck
+    Grin.ExtendedSyntax.TypeEnv
+    Grin.ExtendedSyntax.TypeEnvDefs
+    Grin.ExtendedSyntax.GADT
+    Pipeline.Eval
+    Pipeline.Optimizations
+    Pipeline.Pipeline
+    Reducer.Base
     Reducer.IO
     Reducer.LLVM.Base
-    Reducer.LLVM.InferType
-    Reducer.LLVM.TypeGen
     Reducer.LLVM.CodeGen
-    Reducer.LLVM.PrimOps
+    Reducer.LLVM.InferType
     Reducer.LLVM.JIT
-    Test
-    Gspec
-    Statistics
-    Lint
-    Transformations.CountVariableUse
-    Transformations.AssignStoreIDs
-    Transformations.GenerateEval
+    Reducer.LLVM.PrimOps
+    Reducer.LLVM.TypeGen
+    Reducer.PrimOps
+    Reducer.Pure
+    Reducer.Interpreter.Base
+    Reducer.Interpreter.Definitional
+    Reducer.Interpreter.Env
+    Reducer.Interpreter.Store
+    Reducer.Interpreter.Definitional.Instance
+    Reducer.Interpreter.Definitional.Internal
+    Reducer.Interpreter.Definitional.Cib
+
+    Test.Assertions
+    Test.Check
+    Test.Grammar
+    Test.IO
+    Test.Test
+    Test.Util
+    Test.ExtendedSyntax.Assertions
+    Test.ExtendedSyntax.Old.Grammar
+    Test.ExtendedSyntax.Old.Test
+    Test.ExtendedSyntax.New.Test
+    Test.ExtendedSyntax.Util
+
+    Transformations.ExtendedSyntax.BindNormalisation
+    Transformations.ExtendedSyntax.CountVariableUse
+    Transformations.ExtendedSyntax.EffectMap
+    Transformations.ExtendedSyntax.GenerateEval
+    Transformations.ExtendedSyntax.MangleNames
+    Transformations.ExtendedSyntax.StaticSingleAssignment
+    Transformations.ExtendedSyntax.Optimising.CopyPropagation
+    Transformations.ExtendedSyntax.Optimising.CSE
+    Transformations.ExtendedSyntax.Optimising.EvaluatedCaseElimination
+    Transformations.ExtendedSyntax.Optimising.TrivialCaseElimination
+
     Transformations.BindNormalisation
-    Transformations.SingleStaticAssignment
-    Transformations.Rename
-    Transformations.Substitution
-    Transformations.Playground
+    Transformations.CountVariableUse
+    Transformations.EffectMap
+    Transformations.GenerateEval
+    Transformations.MangleNames
     Transformations.Names
+    Transformations.StaticSingleAssignment
+    Transformations.UnitPropagation
     Transformations.Util
+    Transformations.ExtendedSyntax.Conversion
+    Transformations.ExtendedSyntax.Names
+    Transformations.ExtendedSyntax.Util
+    Transformations.Optimising.ArityRaising
+    Transformations.Optimising.CaseCopyPropagation
+    Transformations.Optimising.CaseHoisting
+    Transformations.Optimising.ConstantFolding
+    Transformations.Optimising.ConstantPropagation
+    Transformations.Optimising.CopyPropagation
+    Transformations.Optimising.CSE
+    Transformations.Optimising.DeadDataElimination
+    Transformations.Optimising.DeadFunctionElimination
+    Transformations.Optimising.DeadParameterElimination
+    Transformations.Optimising.DeadVariableElimination
+    Transformations.Optimising.EvaluatedCaseElimination
+    Transformations.Optimising.GeneralizedUnboxing
+    Transformations.Optimising.Inlining
+    Transformations.Optimising.SimpleDeadFunctionElimination
+    Transformations.Optimising.SimpleDeadVariableElimination
+    Transformations.Optimising.SimpleDeadParameterElimination
+    Transformations.Optimising.SparseCaseOptimisation
+    Transformations.Optimising.TrivialCaseElimination
+    Transformations.Optimising.UpdateElimination
+    Transformations.Optimising.NonSharedElimination
+    Transformations.Simplifying.CaseSimplification
+    Transformations.Simplifying.ProducerNameIntroduction
+    Transformations.Simplifying.BindingPatternSimplification
+    Transformations.Simplifying.RegisterIntroduction
+    Transformations.Simplifying.RightHoistFetch2
+    Transformations.Simplifying.SplitFetch
     Transformations.Simplifying.Vectorisation
     Transformations.Simplifying.Vectorisation2
-    Transformations.Simplifying.SplitFetch
-    Transformations.Simplifying.CaseSimplification
-    Transformations.Simplifying.RegisterIntroduction
-    Transformations.Simplifying.RightHoistFetch
-    Transformations.Simplifying.RightHoistFetch2
-    Transformations.Optimising.EvaluatedCaseElimination
-    Transformations.Optimising.TrivialCaseElimination
-    Transformations.Optimising.SparseCaseOptimisation
-    Transformations.Optimising.UpdateElimination
-    Transformations.Optimising.CaseHoisting
-    Transformations.Optimising.CaseCopyPropagation
-    Transformations.Optimising.CopyPropagation
-    Transformations.Optimising.ConstantPropagation
-    Transformations.Optimising.DeadProcedureElimination
-    Transformations.Optimising.DeadVariableElimination
-    Transformations.Optimising.DeadParameterElimination
-    Transformations.Optimising.CSE
-    Transformations.Optimising.Inlining
-    Transformations.Optimising.ArityRaising
-    Transformations.Optimising.ConstantFolding
-    Transformations.Optimising.GeneralizedUnboxing
-    AbstractInterpretation.AbstractRunGrin
-    AbstractInterpretation.HPTResult
-    AbstractInterpretation.HPTResultNew
-    AbstractInterpretation.PrettyHPT
-    AbstractInterpretation.Pretty
-    AbstractInterpretation.IR
-    AbstractInterpretation.CodeGen
-    AbstractInterpretation.Reduce
-    Frontend.Lambda.Syntax
-    Frontend.Lambda.Parse
-    Frontend.Lambda.Pretty
-    Frontend.Lambda.CodeGen
-    Frontend.Lambda.PrimOps
-    Frontend.GHC.FromSTG
-    Frontend.Idris.CodegenGrin
-    Frontend.Idris.PrimOps
-    VarGen
-    Pipeline
-    Assertions
-    Grammar
+    Lens.Micro.Extra
 
   build-depends:
-    base,
+    base >=4.11,
     containers,
     bimap,
     mtl,
@@ -109,8 +217,10 @@ library
     monad-gen,
     free,
     bytestring,
-    llvm-hs,
-    llvm-hs-pure,
+    llvm-hs ==7.*,
+    llvm-hs-pure ==7.*,
+    llvm-hs-pretty >=0.6.1,
+    inline-c,
     filepath,
     transformers,
     microlens,
@@ -119,28 +229,33 @@ library
     microlens-platform,
     process,
     text,
-    llvm-hs-pretty,
+    time,
     optparse-applicative,
     directory,
     pretty-simple,
     functor-infix,
     generic-random,
     hspec,
+    hspec-core,
     extra,
     logict,
     QuickCheck,
-    ghc,
-    idris,
+    quickcheck-instances,
     neat-interpolation,
-    template-haskell
+    template-haskell,
+    Diff,
+    random,
+    set-extra,
+    deepseq,
+    binary
 
   default-language:    Haskell2010
 
 executable grin
   hs-source-dirs:      app
-  main-is:             GrinCLI.hs
+  main-is:             CLI/Main.hs
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-  build-depends:       base
+  build-depends:       base >=4.11
                      , grin
                      , recursion-schemes
                      , ansi-wl-pprint
@@ -158,130 +273,236 @@ executable grin
                      , microlens-platform
                      , optparse-applicative
                      , directory
+                     , binary
+  other-modules:
+    CLI.Lib
   default-language:    Haskell2010
 
 test-suite grin-test
   type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
+  hs-source-dirs:      test, app
   main-is:             Spec.hs
-  build-depends:       base
+  default-extensions:  OverloadedStrings
+  build-depends:       base >=4.11
                      , containers
+                     , filepath
                      , functor-infix
                      , grin
                      , hspec
+                     , hspec-core
                      , hspec-discover
                      , QuickCheck
                      , deepseq
                      , vector
-  other-modules:       Transformations.Simplifying.RegisterIntroductionSpec
-                     , Transformations.Simplifying.CaseSimplificationSpec
-                     , Transformations.Simplifying.SplitFetchSpec
-                     , Transformations.Simplifying.RightHoistFetchSpec
-                     , Transformations.Simplifying.VectorisationSpec
-                     , Transformations.Optimising.CaseCopyPropagationSpec
-                     , Transformations.Optimising.CopyPropagationSpec
-                     , Transformations.Optimising.ConstantFoldingSpec
-                     , Transformations.Optimising.ConstantPropagationSpec
-                     , Transformations.Optimising.EvaluatedCaseEliminationSpec
-                     , Transformations.Optimising.TrivialCaseEliminationSpec
-                     , Transformations.Optimising.SparseCaseOptimisationSpec
-                     , Transformations.Optimising.UpdateEliminationSpec
-                     , Transformations.Optimising.CSESpec
-                     , Transformations.Optimising.GeneralizedUnboxingSpec
-                     , Transformations.Optimising.ArityRaisingSpec
-                     , Transformations.Optimising.DeadProcedureEliminationSpec
-                     , Transformations.Optimising.DeadParameterEliminationSpec
-                     , Transformations.Optimising.DeadVariableEliminationSpec
-                     , Transformations.Optimising.InliningSpec
-                     , Transformations.Optimising.CaseHoistingSpec
-                     , Transformations.SingleStaticAssignmentSpec
-                     , Transformations.BindNormalisationSpec
-                     , Samples.SumListSpec
-                     , Samples.ArityFullRemoveSpec
-                     , LintSpec
-                     , TestSpec
-                     , PipelineSpec
-                     , ParserSpec
+                     , text
+                     , random
+                     , microlens
+                     , transformers
+                     , mtl
+                     , ansi-wl-pprint
+                     , directory
+                     , inline-c
+                     , directory-tree
+                     , yaml
+                     , binary
+                     , optparse-applicative
+                     , megaparsec
+                     , system-posix-redirect
+                     , process
+                     , bytestring
+                     , MissingH
+                     , recursion-schemes
+
+  other-modules:
+                     Transformations.Simplifying.RegisterIntroductionSpec
+                     Transformations.Simplifying.CaseSimplificationSpec
+                     Transformations.Simplifying.SplitFetchSpec
+                     Transformations.Simplifying.RightHoistFetchSpec
+                     Transformations.Simplifying.VectorisationSpec
+                     Transformations.Simplifying.ProducerNameIntroductionSpec
+                     Transformations.Simplifying.BindingPatternSimplificationSpec
+                     Transformations.Optimising.CaseCopyPropagationSpec
+                     Transformations.Optimising.CopyPropagationSpec
+                     Transformations.Optimising.ConstantFoldingSpec
+                     Transformations.Optimising.ConstantPropagationSpec
+                     Transformations.Optimising.EvaluatedCaseEliminationSpec
+                     Transformations.Optimising.TrivialCaseEliminationSpec
+                     Transformations.Optimising.SparseCaseOptimisationSpec
+                     Transformations.Optimising.UpdateEliminationSpec
+                     Transformations.Optimising.CSESpec
+                     Transformations.Optimising.GeneralizedUnboxingSpec
+                     Transformations.Optimising.ArityRaisingSpec
+                     Transformations.Optimising.SimpleDeadFunctionEliminationSpec
+                     Transformations.Optimising.SimpleDeadParameterEliminationSpec
+                     Transformations.Optimising.SimpleDeadVariableEliminationSpec
+                     Transformations.Optimising.InliningSpec
+                     Transformations.Optimising.CaseHoistingSpec
+                     Transformations.Optimising.DeadDataEliminationSpec
+                     Transformations.Optimising.DeadFunctionEliminationSpec
+                     Transformations.Optimising.DeadParameterEliminationSpec
+                     Transformations.Optimising.DeadVariableEliminationSpec
+                     Transformations.StaticSingleAssignmentSpec
+                     Transformations.BindNormalisationSpec
+                     Transformations.ConfluenceSpec
+                     Transformations.MangleNamesSpec
+                     Samples.SumListSpec
+                     Samples.ArityFullRemoveSpec
+                     LintSpec
+                     TestSpec
+                     PipelineSpec
+                     PrettySpec
+                     ParserSpec
+                     PrimOpsSpec
+                     NametableSpec
+                     AbstractInterpretation.HptSpec
+                     AbstractInterpretation.LiveVariableSpec
+                     AbstractInterpretation.EffectTrackingSpec
+                     AbstractInterpretation.IRSpec
+                     AbstractInterpretation.OptimiseAbstractProgramSpec
+                     AbstractInterpretation.SharingSpec
+                     AbstractInterpretation.CreatedBySpec
+                     Test.Hspec.PipelineExample
+                     Test.EndToEnd
+                     Test.EndToEndSpec
+                     CLI.Lib
+                     AbstractInterpretation.ExtendedSyntax.CreatedBySpec
+                     AbstractInterpretation.ExtendedSyntax.EffectTrackingSpec
+                     AbstractInterpretation.ExtendedSyntax.HptSpec
+                     AbstractInterpretation.ExtendedSyntax.IRSpec
+                     AbstractInterpretation.ExtendedSyntax.LiveVariableSpec
+                     AbstractInterpretation.ExtendedSyntax.OptimiseAbstractProgramSpec
+                     AbstractInterpretation.ExtendedSyntax.SharingSpec
+                     ExtendedSyntax.LintSpec
+                     ExtendedSyntax.NametableSpec
+                     ExtendedSyntax.ParserSpec
+                     Reducer.Interpreter.Definitional.CibSpec
+                     Transformations.ExtendedSyntax.BindNormalisationSpec
+                     Transformations.ExtendedSyntax.ConversionSpec
+                     Transformations.ExtendedSyntax.MangleNamesSpec
+                     Transformations.ExtendedSyntax.Optimising.CSESpec
+                     Transformations.ExtendedSyntax.Optimising.CopyPropagationSpec
+                     Transformations.ExtendedSyntax.Optimising.EvaluatedCaseEliminationSpec
+                     Transformations.ExtendedSyntax.Optimising.TrivialCaseEliminationSpec
+                     Transformations.ExtendedSyntax.StaticSingleAssignmentSpec
   default-language:    Haskell2010
+
+test-suite grin-end-to-end-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test, app
+  main-is:             EndToEnd.hs
+  default-extensions:  OverloadedStrings
+  build-depends:       base >=4.11
+                     , containers
+                     , filepath
+                     , functor-infix
+                     , grin
+                     , hspec
+                     , hspec-core
+                     , hspec-discover
+                     , QuickCheck
+                     , deepseq
+                     , vector
+                     , text
+                     , random
+                     , microlens
+                     , transformers
+                     , mtl
+                     , ansi-wl-pprint
+                     , directory
+                     , inline-c
+                     , directory-tree
+                     , yaml
+                     , megaparsec
+                     , binary
+                     , optparse-applicative
+                     , system-posix-redirect
+                     , process
+                     , bytestring
+                     , MissingH
+  other-modules:
+                     ExtendedSyntax.LintSpec
+                     ExtendedSyntax.NametableSpec
+                     ExtendedSyntax.ParserSpec
+                     Transformations.ExtendedSyntax.BindNormalisationSpec
+                     Transformations.ExtendedSyntax.ConversionSpec
+                     Transformations.ExtendedSyntax.MangleNamesSpec
+                     Transformations.ExtendedSyntax.StaticSingleAssignmentSpec
+                     Transformations.ExtendedSyntax.Optimising.CopyPropagationSpec
+                     Transformations.ExtendedSyntax.Optimising.CSESpec
+                     Transformations.ExtendedSyntax.Optimising.EvaluatedCaseEliminationSpec
+                     Transformations.ExtendedSyntax.Optimising.TrivialCaseEliminationSpec
+
+                     Transformations.Simplifying.RegisterIntroductionSpec
+                     Transformations.Simplifying.CaseSimplificationSpec
+                     Transformations.Simplifying.SplitFetchSpec
+                     Transformations.Simplifying.RightHoistFetchSpec
+                     Transformations.Simplifying.VectorisationSpec
+                     Transformations.Simplifying.ProducerNameIntroductionSpec
+                     Transformations.Simplifying.BindingPatternSimplificationSpec
+                     Transformations.Optimising.CaseCopyPropagationSpec
+                     Transformations.Optimising.CopyPropagationSpec
+                     Transformations.Optimising.ConstantFoldingSpec
+                     Transformations.Optimising.ConstantPropagationSpec
+                     Transformations.Optimising.EvaluatedCaseEliminationSpec
+                     Transformations.Optimising.TrivialCaseEliminationSpec
+                     Transformations.Optimising.SparseCaseOptimisationSpec
+                     Transformations.Optimising.UpdateEliminationSpec
+                     Transformations.Optimising.CSESpec
+                     Transformations.Optimising.GeneralizedUnboxingSpec
+                     Transformations.Optimising.ArityRaisingSpec
+                     Transformations.Optimising.SimpleDeadFunctionEliminationSpec
+                     Transformations.Optimising.SimpleDeadParameterEliminationSpec
+                     Transformations.Optimising.SimpleDeadVariableEliminationSpec
+                     Transformations.Optimising.InliningSpec
+                     Transformations.Optimising.CaseHoistingSpec
+                     Transformations.Optimising.DeadDataEliminationSpec
+                     Transformations.Optimising.DeadFunctionEliminationSpec
+                     Transformations.Optimising.DeadParameterEliminationSpec
+                     Transformations.Optimising.DeadVariableEliminationSpec
+                     Transformations.StaticSingleAssignmentSpec
+                     Transformations.BindNormalisationSpec
+                     Transformations.ConfluenceSpec
+                     Transformations.MangleNamesSpec
+                     Samples.SumListSpec
+                     Samples.ArityFullRemoveSpec
+                     LintSpec
+                     TestSpec
+                     PipelineSpec
+                     PrettySpec
+                     ParserSpec
+                     PrimOpsSpec
+                     NametableSpec
+                     AbstractInterpretation.ExtendedSyntax.EffectTrackingSpec
+                     AbstractInterpretation.ExtendedSyntax.CreatedBySpec
+                     AbstractInterpretation.ExtendedSyntax.HptSpec
+                     AbstractInterpretation.ExtendedSyntax.IRSpec
+                     AbstractInterpretation.ExtendedSyntax.LiveVariableSpec
+                     AbstractInterpretation.ExtendedSyntax.OptimiseAbstractProgramSpec
+                     AbstractInterpretation.ExtendedSyntax.SharingSpec
+                     AbstractInterpretation.HptSpec
+                     AbstractInterpretation.LiveVariableSpec
+                     AbstractInterpretation.EffectTrackingSpec
+                     AbstractInterpretation.IRSpec
+                     AbstractInterpretation.OptimiseAbstractProgramSpec
+                     AbstractInterpretation.SharingSpec
+                     AbstractInterpretation.CreatedBySpec
+                     Test.Hspec.PipelineExample
+                     Test.EndToEnd
+                     Test.EndToEndSpec
+                     CLI.Lib
+  default-language:    Haskell2010
+
 
 benchmark grin-benchmark
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
   main-is:             Benchmark.hs
-  build-depends:       base
+  build-depends:       base >=4.11
                      , grin
                      , criterion
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 
-executable hpt
-  hs-source-dirs:      app
-  main-is:             HardcodedHPT.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-  build-depends:       base
-                     , grin
-                     , recursion-schemes
-                     , ansi-wl-pprint
-                     , containers
-  default-language:    Haskell2010
-
 source-repository head
   type:     git
   location: https://github.com/grin-tech/grin
-
-executable lambda-grin
-  hs-source-dirs:      app
-  main-is:             LambdaGrin.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-  build-depends:       base
-                     , mtl
-                     , megaparsec
-                     , ansi-wl-pprint
-                     , grin
-  default-language:    Haskell2010
-
-executable ghc-grin
-  hs-source-dirs:      app
-  main-is:             GHCGrin.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-  build-depends:       base
-                     , mtl
-                     , grin
-                     , ghc
-                     , ghc-paths
-  default-language:    Haskell2010
-
-executable idris-codegen-grin
-  main-is:        IdrisGrin.hs
-  hs-source-dirs: app
-
-  build-depends:  idris
-                , base
-                , containers
-                , directory
-                , filepath
-                , haskeline >= 0.7
-                , mtl
-                , transformers
-                , grin
-
-  if os(linux)
-     cpp-options:   -DLINUX
-     build-depends: unix < 2.8
-  if os(freebsd)
-     cpp-options:   -DFREEBSD
-     build-depends: unix < 2.8
-  if os(dragonfly)
-     cpp-options:   -DDRAGONFLY
-     build-depends: unix < 2.8
-  if os(darwin)
-     cpp-options:   -DMACOSX
-     build-depends: unix < 2.8
-  if os(windows)
-     cpp-options:   -DWINDOWS
-     build-depends: Win32 < 2.4
-
-  ghc-prof-options: -auto-all -caf-all
-  ghc-options:      -threaded -rtsopts -funbox-strict-fields
-
-

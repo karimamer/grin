@@ -1,263 +1,196 @@
-{-# LANGUAGE LambdaCase, TupleSections, RecordWildCards #-}
+{-# LANGUAGE LambdaCase #-}
 module Transformations.Optimising.ArityRaising where
 
-import Control.Arrow
-import Data.Maybe
-import Data.Map (Map)
-import qualified Data.Map as Map
-import Data.Set (Set)
-import qualified Data.Set as Set
-import Data.Vector (Vector)
-import qualified Data.Vector as V
-import Data.Functor.Foldable as Foldable
-import qualified Data.Foldable
-import Grin
-import TypeEnv
-import Debug.Trace
-import Lens.Micro.Platform
-import qualified Data.Vector as Vector
-import Control.Monad
-import Data.Monoid hiding (Alt)
-import Data.Functor.Infix
-import Data.List as List
-import Control.Monad.State
-import Transformations.Util (apoM)
+import Grin.Grin (packName, unpackName)
+import Grin.Syntax
+import Grin.TypeEnv
+import Data.Functor.Foldable
 
+import Data.List (nub)
+import Data.Maybe (fromJust, isJust, mapMaybe)
+import Data.Monoid
+import qualified Data.Set as Set; import Data.Set (Set)
+import qualified Data.Map.Strict as Map; import Data.Map (Map)
+import qualified Data.Vector as Vector; import Data.Vector (Vector)
+import Control.Monad.State.Strict
+import Transformations.Names (ExpChanges(..))
 
-type VarM a = State TypeEnv a
+{-
+1. Select one function which has a parameter of a pointer to one constructor only.
+2. If the parameter is linear and fetched in the function body then this is a good function for
+   arity raising
 
-runVarM :: TypeEnv -> VarM a -> (TypeEnv, a)
-runVarM te = (\(f,s) -> (s,f)) . flip runState te
+How to raise arity?
+1. Change the function parameters: replace the parameter with the parameters in the constructor
+2. Change the function body: remove the fectch and use the variables as parameters
+3. Change the caller sides: instead of passing the pointer fetch the pointer and pass the values are parameters
 
-changeParams :: [(Name, [SimpleType])] -> [(Name, Type)] -> [(Name, [(Name, Type)])]
-changeParams tagParams names = map
-  (\(name, t) -> maybe (name, [(name, t)]) (((,) name) . newParams name) $ List.lookup name tagParams)
-  names
+How to handle self recursion?
+1. If a function is self recursive, the paramter that is fetched originaly in the function body
+   must be passed as normal parameters in the same function call.
 
-newParams :: Name -> [SimpleType] -> [(Name, Type)]
-newParams name [ty] = [(name, T_SimpleType ty)]
-newParams name types  = flip map (types `zip` [1 ..]) $ \(t, i) -> (name <> show i, T_SimpleType t)
+Phase 1: Select a function and a parameter to transform.
+Phase 2: Transform the parameter and the function body.
+Phase 3: Transform the callers.
 
--- TODO: Create unique names
-arityRaising :: (TypeEnv, Exp) -> (TypeEnv, Exp)
-arityRaising (te, exp) = runVarM te (apoM builder ([], exp))
+This way the fetches propagates slowly to the caller side to the creational point.
+
+Parameters:
+ - Used only in fetch or in recursive calls for the same function.
+ - Its value points to a location, which location has only one Node with at least one parameter
+-}
+
+-- TODO: True is reported even if exp stayed the same. Investigate why exp stay the same
+-- for non-null arity data.
+arityRaising :: Int -> TypeEnv -> Exp -> (Exp, ExpChanges)
+arityRaising n te exp = if Map.null arityData then (exp, NoChange) else (phase2 n arityData exp, NewNames)
   where
-    candidates :: Map Name [(Name, Int, (Tag, Vector SimpleType))]
-    candidates =
-      flip examineCallees (te,exp) $
-      flip examineCallers exp $
-      examineTheParameters (te, exp)
+    arityData = phase1 te exp
 
-    nodeParamMap :: Map Name (Tag, Vector SimpleType)
-    nodeParamMap = Map.fromList $ map (\(n, _i, ts) -> (n, ts)) $ concat $ Map.elems candidates
+-- | ArityData maps a function name to its arguments that can be arity raised.
+-- 1st: Name of the argument
+-- 2nd: The index of the argument
+-- 3rd: The tag and one possible locaition where the parameter can point to.
+type ArityData = Map Name [(Name, Int, (Tag, Int))]
 
-    -- Set of stores in the function body.
-    collectStores :: Exp -> [(Name, Val)]
-    collectStores = para $ \case
-      SBlockF (_, body)  -> body
-      AltF _ (_, body)   -> body
-      ECaseF _ alts -> mconcat $ map snd alts
-      EBindF (SStore node, _) (Var v) (_, rhs) -> [(v,node)] <> rhs
-      EBindF (_, lhs) _ (_, rhs) -> lhs <> rhs
-      _ -> mempty
+type ParameterInfo = Map Name (Int, (Tag, Int))
 
-    -- The substituition that contains a Node or a list of new invariant parameters
-    builder :: ([(Name, Either Val [Name])], Exp) -> VarM (ExpF (Either Exp ([(Name, Either Val [Name])], Exp)))
-    builder (substs0, exp0) = case exp0 of
-      Def name params0 body ->
-        let substs1 = map (second Left) $ collectStores body
-        in case Map.lookup name candidates of
-            Nothing        -> pure $ DefF name params0 (Right (substs1, body))
-            Just tagParams -> do
-              (Just (t, paramsTypes0)) <- use (function . at name)
-              let oldToNewParams = changeParams
-                    (map (\(n, i, (t, ts)) -> (n, Vector.toList ts)) tagParams)
-                    (params0 `zip` (Vector.toList paramsTypes0))
-              forM oldToNewParams $ \(old, news) -> do
-                variable . at old .= Nothing
-                forM news $ \(newName, newType) -> (variable . at newName) .= Just newType
-              let params1 = concatMap snd oldToNewParams
-                  (paramNames, paramTypes) = unzip params1
-              let substs2 = substs1 ++ map (second (Right . map fst)) oldToNewParams
-              function . at name %= fmap (second (const (Vector.fromList paramTypes)))
-              pure $ DefF name paramNames (Right (substs2, body))
+data Phase1Data
+  = ProgramData { pdArityData :: ArityData }
+  | FunData { fdArityData :: ArityData }
+  | BodyData { bdFunCall :: [(Name, Name)]
+             , bdFetch   :: Map Name Int
+             , bdOther   :: [Name]
+             }
+  deriving (Show)
 
-      SApp name params -> pure $ case (Map.lookup name candidates) of
-        Nothing -> SAppF name params
-        Just parametersToChange -> SAppF name $ flip concatMap ([1..] `zip` params) $ \case
-          (_, Lit l) -> [Lit l]
-          (i, Var v) -> case (List.find (\(_, i0, _) -> i == i0) parametersToChange) of
-            Nothing -> case List.lookup v substs0 of
-              Just (Right [name]) -> [Var name]
-              _                   -> [Var v]
-            Just _  -> case List.lookup v substs0 of
-              Nothing -> [Var v]
-              Just (Left (ConstTagNode tag vals)) -> vals -- The tag node should have the arity as in the candidates
-              Just (Left (Var v)) -> [Var v]
-              Just (Right names) -> map Var names
+instance Semigroup Phase1Data where
+  (ProgramData ad0) <> (ProgramData ad1) = ProgramData (Map.unionWith mappend ad0 ad1)
+  (FunData fd0) <> (FunData fd1) = FunData (mappend fd0 fd1)
+  (BodyData c0 f0 o0) <> (BodyData c1 f1 o1) = BodyData (c0 ++ c1) (Map.unionWith (+) f0 f1) (o0 ++ o1)
 
-      SFetchI name pos -> case (Map.lookup name nodeParamMap) of
-        Nothing        -> pure $ SFetchIF name pos
-        Just (tag, ps) -> do
-          let params = newParams name (Vector.toList ps)
-          forM_ params $ \(newName, newType) ->
-            variable . at newName .= Just newType
-          pure $ SReturnF $ ConstTagNode tag $ ((Var . fst) <$> params)
+instance Monoid Phase1Data where
+  mempty = BodyData mempty mempty mempty
 
-      rest -> pure $ fmap (Right . (,) substs0) $ project rest
+variableInVar   = \case { Var n -> [n]; _ -> [] }
+variableInNode  = \case { ConstTagNode _ vs -> concatMap variableInVar vs; _ -> [] }
+variableInNodes = concatMap variableInNode
 
--- Return the functions that has node set parameters with unique names
-examineTheParameters :: (TypeEnv, Exp) -> Map Name [(Name, Int, (Tag, Vector SimpleType))]
-examineTheParameters (te, e) = Map.filter (not . null) $ Map.map candidate funs
-  where
-    funs :: Map Name [(Name, Type)]
-    funs = Map.intersectionWith combine (_function te) funParamNames
-    combine (_tr, pt) params = params `zip` (Vector.toList pt)
+phase1 :: TypeEnv -> Exp -> ArityData
+phase1 te = pdArityData . cata collect where
+  collect :: ExpF Phase1Data -> Phase1Data
+  collect = \case
+    SAppF fn ps       -> mempty { bdFunCall = [ (fn, v) | Var v <- ps], bdOther = variableInNodes ps }
+    SFetchIF var _    -> mempty { bdFetch = Map.singleton var 1 }
+    SUpdateF var val  -> mempty { bdOther = [var] ++ variableInNode val ++ variableInVar val }
+    SReturnF val -> mempty { bdOther = variableInNode val ++ variableInVar val }
+    SStoreF v  -> mempty { bdOther = variableInNode v ++ variableInVar v }
+    SBlockF ad -> ad
+    AltF _ ad  -> ad
+    ECaseF v alts    -> mconcat alts <> mempty { bdOther = variableInNode v ++ variableInVar v }
+    EBindF lhs _ rhs -> lhs <> rhs
 
-    funParamNames = flip cata e $ \case
-      ProgramF defs      -> mconcat defs
-      DefF name params _ -> Map.singleton name params
-      _                  -> mempty
+    -- Keep the parameters that are locations and points to a single node with at least one parameters
+    -- - that are not appear in others
+    -- - that are not appear in other function calls
+    -- - that are fetched at least once
+    DefF fn ps body ->
+      let funData =
+            [ (p,i,(fromJust mtag))
+            | (p,i) <- ps `zip` [1..]
+            , Map.member p (bdFetch body)
+            , let mtag = pointsToOneNode te p
+            , isJust mtag
+            , p `notElem` (bdOther body)
+            , p `notElem` (snd <$> (filter ((/=fn) . fst) (bdFunCall body)))
+            , fn /= "grinMain"
+            ]
+      in FunData $ case funData of
+          [] -> Map.empty
+          _  -> Map.singleton fn funData
 
-    candidate :: [(Name, Type)] -> [(Name, Int, (Tag, Vector SimpleType))]
-    candidate ns = flip mapMaybe (ns `zip` [1..]) $ \((name, typ), idx) -> (,,) name idx <$>
-      typ ^? _T_SimpleType
-           . _T_Location
-           . to (sameNodeOnLocations te)
-           . _Just
+    ProgramF exts defs -> ProgramData $ Map.unionsWith mappend (fdArityData <$> defs)
 
--- MonoidMap
-newtype MMap k m = MMap { unMMap :: Map k m }
-  deriving Show
-
-instance (Ord k, Monoid m) => Monoid (MMap k m) where
-  mempty = MMap mempty
-  mappend (MMap m1) (MMap m2) = MMap (Map.unionWith mappend m1 m2)
-
--- | Examine the function calls in the body.
-examineCallers :: Map Name [(Name, Int, (Tag, Vector SimpleType))] -> Exp -> Map Name [(Name, Int, (Tag, Vector SimpleType))]
-examineCallers candidates e =
-    Map.difference candidates $
-    (\(_,_,exclude,_) -> Map.fromSet (const ()) exclude) $
-    para collect e
-  where
-    inCandidates :: Name -> (Name, Int) -> Bool
-    inCandidates fn (funName, nth)
-        -- Non-recursive case
-      | fn /= funName = Map.member funName candidates
-        -- Recursive case
-      | otherwise = isJust $ do -- Maybe
-          params <- Map.lookup funName candidates
-          List.find ((nth ==) . view _2) params
-
-    -- Function calls in body: VarName -> [(FunName, Nth param)]
-    -- Name of parameters to be checked
-    -- Name of functions to be excluded
-    -- Name of parameters not bound to a store
-    collect :: ExpF (Exp, (MMap Name [(Name, Int)], Set Name, Set Name, Set Name)) -> (MMap Name [(Name, Int)], Set Name, Set Name, Set Name)
-    collect = \case
-      ProgramF defs -> mconcat $ map snd defs
-
-      DefF name params (_, (MMap calls, callsParam, _, nonStored)) ->
-        let recFunParams = fromMaybe [] (view _1 <$$> Map.lookup name candidates)
-            params0 = Set.fromList $ params \\ recFunParams
-        in ( mempty
-           , mempty
-           , Set.map fst $ Set.fromList $ filter (inCandidates name) $ -- Only interested in candidates
-             concatMap (\p -> fromMaybe [] $ Map.lookup p calls) $ -- Every function that uses the parameters
-             (nonStored `Set.union` params0) `Set.intersection` callsParam -- Call parameters should be stored
-           , mempty
-           )
-
-      SBlockF (_, body) -> body
-      ECaseF _ alts     -> mconcat $ map snd alts
-      EBindF (SStore (ConstTagNode _ _), lhs) (Var _) (_, rhs) -> rhs
-      EBindF (_, lhs) pat (_, rhs)      -> mconcat [lhs, rhs, (mempty, mempty, mempty, vars pat)]
-
-      AltF (NodePat _ names) (_, body) -> body <> (mempty, mempty, mempty, Set.fromList names)
-      AltF _                 (_, body) -> body
-      SAppF name params ->
-        ( mconcat $
-          map (\(p, i) -> MMap (Map.singleton p [(name, i)])) $
-          concatMap (\(p,i) -> (map (flip (,) i) (Set.toList $ vars p))) (params `zip` [1..])
-        , Set.unions (vars <$> params)
-        , mempty
-        , mempty
-        )
-
-      _ -> mempty
-
--- Keep the parameters that are part of an invariant calls only,
--- or an argument to a fetch.
-examineCallees :: Map Name [(Name, Int, (Tag, Vector SimpleType))] -> (TypeEnv, Exp) -> Map Name [(Name, Int, (Tag, Vector SimpleType))]
-examineCallees funParams (te, exp) =
-    Map.mapMaybe (nonEmpty . (filter ((`Set.notMember` others) . view _1))) funParams
-  where
-    others = fst $ cata collect exp
-
-    collect :: ExpF (Set Name, [(Name, Name)]) -> (Set Name, [(Name, Name)])
-    collect = \case
-      ProgramF  defs             -> mconcat defs
-
-      DefF name params body@(others, funCalls)
-        | Map.member name funParams ->
-            -- non recursive function call parameters mut be included in other parameters.
-            let otherCallParams = Set.fromList $ map snd $ filter ((name /=) . view _1) funCalls
-            in (others `Set.union` otherCallParams, mempty)
-        | otherwise                 -> mempty
-
-      SBlockF   body             -> body
-      EBindF    lhs _ rhs        -> lhs <> rhs
-      ECaseF    val as           -> (vars val, mempty) <> mconcat as
-      AltF cpat body             -> body
-
-      SReturnF  val      -> (vars val, mempty)
-      SStoreF   val      -> (vars val, mempty)
-      SUpdateF  name val -> (Set.insert name (vars val), mempty)
-      SAppF name params  -> (mempty, (,) name <$> concatMap (Set.toList . vars) params)
-
-      _ -> mempty -- Update and SApp parameters don't need to be crossed out
-
-vars :: Val -> Set Name
-vars = Set.fromList . \case
-  Var n             -> [n]
-  ConstTagNode _ vs -> vs ^.. each . _Var
-  VarTagNode n vs   -> n : (vs ^.. each . _Var)
-  _                 -> []
-
-sameNodeOnLocations :: TypeEnv -> [Int] -> Maybe (Tag, Vector SimpleType)
-sameNodeOnLocations te is =
-  fmap (second (Vector.map unLEST)) $
-  join $
-  allSame $
-  map (fmap (second (Vector.map LEST))) $
-  map (oneNodeOnLocation te) is
-
--- Ignore the location differences.
-newtype LocEqSimpleType = LEST { unLEST :: SimpleType }
-  deriving Show
-
-instance Eq LocEqSimpleType where
-  (LEST (T_Location _)) == (LEST (T_Location _)) = True
-  (LEST a)              == (LEST b)              = a == b
-
--- | NonEmpty tags
-oneNodeOnLocation :: TypeEnv -> Int -> Maybe (Tag, Vector SimpleType)
-oneNodeOnLocation te idx = case (Map.size ns) of
-  1 -> listToMaybe $ mapMaybe checkNonEmptyTag $ Map.toList ns
+pointsToOneNode :: TypeEnv -> Name -> Maybe (Tag, Int)
+pointsToOneNode te var = case Map.lookup var (_variable te) of
+  (Just (T_SimpleType (T_Location locs))) -> case nub $ concatMap Map.keys $ ((_location te) Vector.!) <$> locs of
+    [tag] -> Just (tag, Vector.length $ head $ Map.elems $ (_location te) Vector.! (head locs))
+    _ -> Nothing
   _ -> Nothing
-  where
-    ns = (_location te) Vector.! idx
-    checkNonEmptyTag :: (Tag, Vector SimpleType) -> Maybe (Tag, Vector SimpleType)
-    checkNonEmptyTag tv@(t, vs)
-      | Vector.null vs = Nothing
-      | otherwise      = Just tv
 
-allSame :: (Eq a) => [a] -> Maybe a
-allSame []     = Nothing
-allSame [a]    = Just a
-allSame (a:as) = if all (a==) as then Just a else Nothing
+type VarM a = State Int a
 
-nonEmpty :: [a] -> Maybe [a]
-nonEmpty [] = Nothing
-nonEmpty xs = Just xs
+{-
+Phase2 and Phase3 can be implemented in one go.
+
+Change only the functions which are in the ArityData map, left the others out.
+ * Change fetches to pure, using the tag information provided
+ * Change funcall parameters
+ * Change fundef parameters
+
+Use the original parameter name with new indices, thus we dont need a name generator.
+-}
+phase2 :: Int -> ArityData -> Exp -> Exp
+phase2 n arityData = flip evalState 0 . cata change where
+  fetchParNames :: Name -> Int -> Int -> [Name]
+  fetchParNames nm idx i = (\j -> packName $ concat [unpackName nm,".",show n,".",show idx,".arity.",show j]) <$> [1..i]
+
+  newParNames :: Name -> Int -> [Name]
+  newParNames nm i = (\j -> packName $ concat [unpackName nm,".",show n,".arity.",show j]) <$> [1..i]
+
+  parameterInfo :: ParameterInfo
+  parameterInfo = Map.fromList $ map (\(n,ith,tag) -> (n, (ith, tag))) $ concat $ Map.elems arityData
+
+  replace_parameters_with_new_ones = concatMap $ \case
+    p | Just (nth, (tag, ps)) <- Map.lookup p parameterInfo ->
+        newParNames p ps
+      | otherwise -> [p]
+
+  change :: ExpF (VarM Exp) -> (VarM Exp)
+  change = \case
+    {- Change only function bodies that are in the ArityData
+        from: (CNode c1 cn) <- fetch pi
+          to: (CNode c1 cn) <- pure (CNode pi1 pin)
+
+        from: funcall p1 pi pn
+          to: rec-funcall p1 pi1 pin pn
+          to: do (CNode c1 cn) <- fetch pi
+                 non-rec-funcall p1 c1 cn pn
+
+        from: fundef p1 pi pn
+          to: fundef p1 pi1 pin pn
+    -}
+    SFetchIF var idx
+      | Just (nth, (tag, ps)) <- Map.lookup var parameterInfo ->
+        pure $ SReturn (ConstTagNode tag (Var <$> newParNames var ps))
+      | otherwise ->
+        pure $ SFetchI var idx
+
+    SAppF f fps
+      | Just aritedParams <- Map.lookup f arityData -> do
+        idx <- get
+        let qsi = Map.fromList $ map (\(_,i,t) -> (i,t)) aritedParams
+            nsi = Map.fromList $ map (\(n,i,t) -> (n,t)) aritedParams
+            psi = [1..] `zip` fps
+            newPs = flip concatMap psi $ \case
+              (_, Var n) | Just (t, jth) <- Map.lookup n nsi -> Var <$> newParNames n jth
+              (i, Var n) | Just (t, jth) <- Map.lookup i qsi -> Var <$> fetchParNames n idx jth
+              (i, Undefined{}) | Just (_, jth) <- Map.lookup i qsi -> replicate jth (Undefined dead_t)
+              (_, other) -> [other]
+            fetches = flip mapMaybe psi $ \case
+              (_, Var n) | Just _ <- Map.lookup n nsi -> Nothing
+              (i, Var n) | Just (t, jth) <- Map.lookup i qsi ->
+                Just ((ConstTagNode t (Var <$> fetchParNames n idx jth)), SFetchI n Nothing)
+              _ -> Nothing
+        put (idx + 1)
+        pure $ case fetches of
+            [] -> SApp f newPs
+            _  -> SBlock $ foldr (\(pat, fetch) rest -> EBind fetch pat rest) (SApp f newPs) fetches
+      | otherwise ->
+        pure $ SApp f fps
+
+    DefF f ps new
+      | Map.member f arityData -> Def f (replace_parameters_with_new_ones ps) <$> new
+      | otherwise              -> Def f ps <$> new
+
+    rest -> embed <$> sequence rest

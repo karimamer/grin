@@ -5,11 +5,11 @@ import Control.Monad
 import Test.Hspec
 import Test.QuickCheck
 import Transformations.Optimising.ConstantFolding
-import Check
-import Grin
-import GrinTH
-import Test
-import Assertions
+import Test.Check
+import Grin.Grin
+import Grin.TH
+import Test.Test
+import Test.Assertions
 
 
 spec :: Spec
@@ -132,8 +132,8 @@ smallerThan transformed original  =
   let sizeReduced  = programSize transformed
       sizeOriginal = programSize original
   in
-    cover (sizeReduced == sizeOriginal) 0 "Non Reduced" $
-    cover (sizeReduced <  sizeOriginal) 1 "Reduced"     $
+    cover 0 (sizeReduced == sizeOriginal) "Non Reduced" $
+    cover 1 (sizeReduced <  sizeOriginal) "Reduced"     $
     (sizeReduced <= sizeOriginal)
 
 checkUniqueNames :: Exp -> Property

@@ -9,7 +9,8 @@ import Data.Functor.Foldable as Foldable
 
 import Text.Printf
 
-import Grin
+import Grin.Grin
+{-
 import AbstractInterpretation.HPTResult (HPTResult(..), Computer(..), RTVar(..), RTNode(..))
 
 type VectorisationAccumulator = (Map.Map Name Val, Exp)
@@ -43,3 +44,5 @@ vectorisation hptResult expression = apo folder (Map.empty, expression)
         replaceVar (Var name) | Just val <- Map.lookup name nameStore = val
         replaceVar var = var
         forwardRecursion = fmap (\subExpression -> Right (nameStore, subExpression)) (project expression)
+-}
+vectorisation _ exp = exp

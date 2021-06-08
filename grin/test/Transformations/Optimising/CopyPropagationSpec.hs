@@ -4,9 +4,9 @@ module Transformations.Optimising.CopyPropagationSpec where
 import Transformations.Optimising.CopyPropagation
 
 import Test.Hspec
-import GrinTH
-import Test hiding (newVar)
-import Assertions
+import Grin.TH
+import Test.Test hiding (newVar)
+import Test.Assertions
 
 
 runTests :: IO ()
@@ -16,6 +16,19 @@ runTests = hspec spec
 spec :: Spec
 spec = do
   testExprContextE $ \ctx -> do
+    it "left unit law" $ do
+      let before = [expr|
+          a1 <- pure 1
+          a2 <- pure a1
+          a3 <- pure a2
+          pure a3
+        |]
+      let after = [expr|
+          a1 <- pure 1
+          pure a1
+        |]
+      copyPropagation (ctx before) `sameAs` (ctx after)
+
     it "simple value" $ do
       let before = [expr|
           a1 <- pure 1
@@ -26,10 +39,21 @@ spec = do
         |]
       let after = [expr|
           a1 <- pure 1
-          a2 <- pure a1
-          a3 <- pure a1
           case a1 of
             #default -> pure a1
+        |]
+      copyPropagation (ctx before) `sameAs` (ctx after)
+
+    it "does not propagate literal values" $ do
+      let before = [expr|
+          a1 <- pure 1
+          a2 <- pure 1
+          pure a2
+        |]
+      let after = [expr|
+          a1 <- pure 1
+          a2 <- pure 1
+          pure a2
         |]
       copyPropagation (ctx before) `sameAs` (ctx after)
 
@@ -46,11 +70,7 @@ spec = do
       let after = [expr|
           a1 <- pure 1
           n1 <- pure (CNode a1 0)
-          n2 <- pure n1
-          a2 <- pure a1
           b1 <- pure 0
-          b2 <- pure b1
-          a3 <- pure a1
           pure (CNode a1 b1)
         |]
       copyPropagation (ctx before) `sameAs` (ctx after)
@@ -69,7 +89,6 @@ spec = do
           a1 <- pure 1
           b1 <- pure 0
           n1 <- pure (CNode a1 b1)
-          a2 <- pure a1
           n2 <- pure (CNode a1 b1)
           case n2 of
             #default -> pure n2
@@ -104,7 +123,6 @@ spec = do
         |]
       let after = [expr|
           a1 <- pure 1
-          a2 <- pure a1
           0 <- pure 1
           pure a1
         |]

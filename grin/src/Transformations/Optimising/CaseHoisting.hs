@@ -12,9 +12,10 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as Vector
+import Data.Bifunctor (first)
 
-import Grin
-import TypeEnv
+import Grin.Grin
+import Grin.TypeEnv
 import Transformations.Util
 import Transformations.Names
 
@@ -32,7 +33,7 @@ getReturnTagSet typeEnv = cata folder where
     ECaseF _ alts -> mconcat <$> sequence alts
 
     SReturnF val
-      | T_NodeSet ns <- typeOfValTE typeEnv val
+      | Just (T_NodeSet ns) <- mTypeOfValTE typeEnv val
       -> Just (Map.keysSet ns)
 
     SAppF name _
@@ -46,8 +47,8 @@ getReturnTagSet typeEnv = cata folder where
     _ -> Nothing
 
 
-caseHoisting :: (TypeEnv, Exp) -> (TypeEnv, Exp)
-caseHoisting (typeEnv, exp) = (typeEnv, fst . evalNameM $ histoM folder exp) where
+caseHoisting :: TypeEnv -> Exp -> (Exp, ExpChanges)
+caseHoisting typeEnv exp = first fst $ evalNameM exp $ histoM folder exp where
 
   folder :: ExpF (Cofree ExpF (Exp, Set Name)) -> NameM (Exp, Set Name)
   folder exp = case exp of

@@ -6,12 +6,12 @@ import Data.Monoid hiding (Alt)
 import Transformations.Simplifying.CaseSimplification
 import Test.Hspec
 import Test.QuickCheck hiding (generate)
-import Test
+import Test.Test
 
-import Check
-import Grin
-import GrinTH
-import Assertions
+import Test.Check
+import Grin.Grin
+import Grin.TH
+import Test.Assertions
 
 
 runTests :: IO ()
@@ -71,7 +71,7 @@ spec = do
 varTagCover :: Exp -> Property -> Property
 varTagCover exp =
   within 10000000 {-microsecond-} .
-  cover (getAny $ valuesInCases (Any . isVarTagNode) exp) 1 "Case with VarTagNode"
+  cover 1 (getAny $ valuesInCases (Any . isVarTagNode) exp) "Case with VarTagNode"
 
 programSizeDoesNotChange :: Exp -> Property
 programSizeDoesNotChange exp = varTagCover exp $ unchangedSize exp $ caseSimplification exp
@@ -92,7 +92,7 @@ checkVarTagCases :: Exp -> Property
 checkVarTagCases = \case
   ECase       val alts | isVarTagNode val -> mconcat (checkAlt <$> alts)
 
-  Program     defs -> mconcat (checkVarTagCases <$> defs)
+  Program _   defs -> mconcat (checkVarTagCases <$> defs)
   Def         name params body -> checkVarTagCases body
 
   EBind       se lpat exp -> checkVarTagCases se <> checkVarTagCases exp
@@ -107,7 +107,9 @@ checkVarTagCases = \case
     checkAlt (Alt cpat exp) = checkVarTagCases exp <> property (isBasicCPat cpat)
 
 
+instance Semigroup Property where
+  p <> q = p .&&. q
+
 instance Monoid Property where
   mempty      = property True
-  mappend p q = p .&&. q
   mconcat ps  = conjoin ps

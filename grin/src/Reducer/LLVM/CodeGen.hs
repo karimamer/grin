@@ -18,8 +18,14 @@ import qualified Data.Set as Set
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import qualified Data.List as List
+import qualified Data.Text as Text
+import qualified Data.ByteString.Short as ShortByteString
+import Data.String (fromString)
+import Text.Printf (printf)
+import Lens.Micro.Mtl
 
 import LLVM.AST hiding (callingConvention, functionAttributes)
+import LLVM.AST.AddrSpace
 import LLVM.AST.Type as LLVM
 import qualified LLVM.AST.Typed as LLVM
 import LLVM.AST.Constant as C hiding (Add, ICmp)
@@ -36,15 +42,18 @@ import LLVM.Module
 
 import Control.Monad.Except
 import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Short as BSShort
 
-import Grin
-import Pretty
-import TypeEnv hiding (Type, typeOfVal)
-import qualified TypeEnv
+import Grin.Grin as Grin
+import Grin.Pretty
+import Grin.TypeEnv hiding (Type, typeOfVal)
+import qualified Grin.TypeEnv as TypeEnv
 import Reducer.LLVM.Base
 import Reducer.LLVM.PrimOps
 import Reducer.LLVM.TypeGen
 import Reducer.LLVM.InferType
+
+
 
 debugMode :: Bool
 debugMode = True
@@ -55,12 +64,25 @@ toLLVM fname mod = withContext $ \ctx -> do
   BS.writeFile fname llvm
   pure llvm
 
-codeGenLit :: Lit -> C.Constant
+codeGenLit :: Lit -> CG C.Constant
 codeGenLit = \case
-  LInt64 v  -> Int {integerBits=64, integerValue=fromIntegral v}
-  LWord64 v -> Int {integerBits=64, integerValue=fromIntegral v}
-  LFloat v  -> C.Float {floatValue=F.Single v}
-  LBool v   -> Int {integerBits=1, integerValue=if v then 1 else 0}
+  LInt64 v  -> pure $ Int {integerBits=64, integerValue=fromIntegral v}
+  LWord64 v -> pure $ Int {integerBits=64, integerValue=fromIntegral v}
+  LFloat v  -> pure $ C.Float {floatValue=F.Single v}
+  LBool v   -> pure $ Int {integerBits=1, integerValue=if v then 1 else 0}
+  LChar v   -> pure $ Int {integerBits=8, integerValue=fromIntegral $ fromEnum v}
+  LString v -> C.GlobalReference stringType <$> strName v
+
+strName :: Text.Text -> CG AST.Name
+strName str = do
+  mName <- use $ envStringMap . at str
+  case mName of
+    Just n -> pure n
+    Nothing -> do
+      counter <- envStringCounter <<%= succ
+      let n = Name $ fromString $ "str." ++ show counter
+      envStringMap %= Map.insert str n
+      pure n
 
 codeGenVal :: Val -> CG Operand
 codeGenVal val = case val of
@@ -68,11 +90,13 @@ codeGenVal val = case val of
   ConstTagNode tag args -> do
     opArgs <- mapM codeGenVal args
 
-    T_NodeSet ns <- typeOfVal val
+    valT <- typeOfVal val
+    let T_NodeSet ns = valT
+
     ty <- typeOfVal val
     let cgTy = toCGType ty
         TaggedUnion{..} = cgTaggedUnion cgTy
-        nodeName = printf "node_%s" (show $ PP tag)
+        nodeName = packName $ printf "node_%s" (show $ PP tag)
         -- set node items
         build agg (item, TUIndex{..}) = do
           codeGenLocalVar nodeName (cgLLVMType cgTy) $ AST.InsertValue
@@ -93,36 +117,41 @@ codeGenVal val = case val of
 
   ValTag tag  -> ConstantOperand <$> getTagId tag
   Unit        -> pure unit
-  Lit lit     -> pure . ConstantOperand . codeGenLit $ lit
+  Lit lit     -> ConstantOperand <$> codeGenLit lit
   Var name    -> do
                   Map.lookup name <$> gets _constantMap >>= \case
-                      -- QUESTION: what is this?
-                      Nothing -> do
-                                  ty <- getVarType name
-                                  pure $ LocalReference (cgLLVMType ty) (mkName name)
-                      Just operand  -> pure operand
+                    -- QUESTION: what is this?
+                    Nothing -> do
+                      ty <- getVarType name
+                      pure $ LocalReference (cgLLVMType ty) (mkNameG name)
+                    Just operand  -> pure operand
+
+  Undefined t -> pure . ConstantOperand . Undef . cgLLVMType. toCGType $ t
 
   _ -> error $ printf "codeGenVal: %s" (show $ pretty val)
 
 getCPatConstant :: CPat -> CG Constant
 getCPatConstant = \case
   TagPat  tag       -> getTagId tag
-  LitPat  lit       -> pure $ codeGenLit lit
+  LitPat  lit       -> codeGenLit lit
   NodePat tag args  -> getTagId tag
   DefaultPat        -> pure C.TokenNone
 
-getCPatName :: CPat -> String
+getCPatName :: CPat -> Grin.Name
 getCPatName = \case
   TagPat  tag   -> tagName tag
   LitPat  lit   -> case lit of
-    LInt64 v  -> "int_" ++ show v
-    LWord64 v -> "word_" ++ show v
-    LBool v   -> "bool_" ++ show v
+    LInt64 v  -> "int_" <> showTS v
+    LWord64 v -> "word_" <> showTS v
+    LBool v   -> "bool_" <> showTS v
+    LChar v   -> "char_" <> showTS v
+    LString v -> error "pattern match on string is not supported"
     LFloat v  -> error "pattern match on float is not supported"
+    other     -> error $ "pattern match not implemented: " ++ show other
   NodePat tag _ -> tagName tag
   DefaultPat  -> "default"
  where
-  tagName (Tag c name) = printf "%s%s" (show c) name
+  tagName (Tag c name) = showTS c <> name
 
 -- https://stackoverflow.com/questions/6374355/llvm-assembly-assign-integer-constant-to-register
 {-
@@ -134,14 +163,38 @@ getCPatName = \case
 toModule :: Env -> AST.Module
 toModule Env{..} = defaultModule
   { moduleName = "basic"
-  , moduleDefinitions = heapPointerDef : reverse _envDefinitions
+  , moduleDefinitions = heapPointerDef : (stringDefinitions) ++ (reverse _envDefinitions)
   }
   where
     heapPointerDef = GlobalDefinition globalVariableDefaults
       { name          = mkName (heapPointerName)
       , Global.type'  = i64
-      , initializer   = Just $ Null i64
+      , initializer   = Just $ Int 64 0
       }
+
+    stringDefinitions = concat
+      [ [ GlobalDefinition globalVariableDefaults
+            { name = valAstName
+            , Global.type' = ArrayType (fromIntegral (length stringVal)) i8
+            , initializer = Just $ C.Array i8 $ [Int 8 $ fromIntegral $ fromEnum v0 | v0 <- stringVal]
+            }
+        , GlobalDefinition globalVariableDefaults
+            { name = astName
+            , Global.type' = stringStructType
+            , initializer = Just $ C.Struct Nothing False -- TODO: Set struct name
+                [ C.GetElementPtr
+                    { inBounds = True
+                    , address = GlobalReference (PointerType (ArrayType (fromIntegral (length stringVal)) i8) (AddrSpace 0)) valAstName
+                    , indices = [Int {integerBits=64, integerValue=0}, Int {integerBits=64, integerValue=0}]
+                    }
+                , Int 64 $ fromIntegral $ length stringVal
+                ]
+            }
+        ]
+      | (stringVal0, astName@(Name astNameBS)) <- Map.toList _envStringMap
+      , let stringVal = Text.unpack stringVal0
+      , let valAstName = Name $ BSShort.pack $ (BSShort.unpack astNameBS) ++ (BSShort.unpack ".val") -- Append ShortByteStrings
+      ]
 
 {-
   type of:
@@ -152,7 +205,7 @@ toModule Env{..} = defaultModule
     ok - SUpdate     Name Val
 -}
 codeGen :: TypeEnv -> Exp -> AST.Module
-codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) . para folder where
+codeGen typeEnv exp = toModule $ flip execState (emptyEnv {_envTypeEnv = typeEnv}) $ para folder exp where
   folder :: ExpF (Exp, CG Result) -> CG Result
   folder = \case
     SReturnF val -> do
@@ -164,7 +217,8 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
       leftResult <- case (leftExp, lpat) of
         -- FIXME: this is an ugly hack to compile SStore ; because it requires the binder name to for type lookup
         (SStore val, Var name) -> do
-          nodeLocation <- codeGenIncreaseHeapPointer name
+          varT <- getVarType name
+          nodeLocation <- codeGenIncreaseHeapPointer varT
           codeGenStoreNode val nodeLocation -- TODO
           pure $ O locationCGType nodeLocation
 
@@ -173,13 +227,13 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
       case lpat of
           VarTagNode{} -> error $ printf "TODO: codegen not implemented %s" (show $ pretty lpat)
           ConstTagNode tag args -> do
-            (cgTy,operand) <- getOperand (printf "node_%s" . show $ PP tag) leftResult
+            (cgTy,operand) <- getOperand ("node_" <> showTS (PP tag)) leftResult
             let mapping = tuMapping $ cgTaggedUnion cgTy
             -- bind node pattern variables
             forM_ (zip (V.toList $ Map.findWithDefault undefined tag mapping) args) $ \(TUIndex{..}, arg) -> case arg of
               Var argName -> do
                 let indices = [1 + tuStructIndex, tuArrayIndex]
-                emit [(mkName argName) := AST.ExtractValue {aggregate = operand, indices' = indices, metadata = []}]
+                emit [(mkNameG argName) := AST.ExtractValue {aggregate = operand, indices' = indices, metadata = []}]
               _ -> pure ()
           Var name -> do
             getOperand name leftResult >>= addConstant name . snd
@@ -189,12 +243,14 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
     SAppF name args -> do
       (retType, argTypes) <- getFunctionType name
       operands <- mapM codeGenVal args
-      operandsTypes <- mapM (\x -> toCGType <$> typeOfVal x) args
+      operandsTypes <- mapM (fmap toCGType . typeOfVal) args
       -- convert values to function argument type
       convertedArgs <- sequence $ zipWith3 codeGenValueConversion operandsTypes operands argTypes
-      if isPrimName name
-        then codeGenPrimOp name args convertedArgs
-        else do
+      let findExternalName :: TypeEnv.Name -> Maybe External
+          findExternalName n = List.find ((n ==) . eName) (externals exp)
+      case findExternalName name of
+        Just e -> codeExternal e convertedArgs
+        Nothing -> do
           -- call to top level functions
           let functionType      = FunctionType
                 { resultType    = cgLLVMType retType
@@ -205,7 +261,7 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
             { tailCallKind        = Just Tail
             , callingConvention   = CC.Fast
             , returnAttributes    = []
-            , function            = Right . ConstantOperand $ GlobalReference (ptr functionType) (mkName name)
+            , function            = Right . ConstantOperand $ GlobalReference (ptr functionType) (mkNameG name)
             , arguments           = zip convertedArgs (repeat [])
             , functionAttributes  = []
             , metadata            = []
@@ -230,7 +286,7 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
               -- bind cpat variables
               forM_ (zip args $ V.toList mapping) $ \(argName, TUIndex{..}) -> do
                 let indices = [1 + tuStructIndex, tuArrayIndex]
-                emit [(mkName argName) := AST.ExtractValue {aggregate = tuVal, indices' = indices, metadata = []}]
+                emit [(mkNameG argName) := AST.ExtractValue {aggregate = tuVal, indices' = indices, metadata = []}]
           DefaultPat -> pure ()
           _ -> error "not implemented"
 
@@ -245,11 +301,15 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
             , _envBlockOrder        = mempty
             }
       clearDefState
-      activeBlock (mkName $ name ++ ".entry")
-      (cgTy, result) <- body >>= getOperand (printf "result.%s" name)
-      let llvmRetType = cgLLVMType cgTy
+      activeBlock (mkNameG $ name <> ".entry")
+      (cgTy, result) <- body >>= getOperand ("result." <> name)
+      (cgRetType, argTypes) <- getFunctionType name
+      let llvmReturnType = cgLLVMType cgRetType
+
+      returnValue <- codeGenValueConversion cgTy result cgRetType
+
       closeBlock $ Ret
-        { returnOperand = Just result
+        { returnOperand = if llvmReturnType == VoidType then Nothing else Just returnValue
         , metadata'     = []
         }
 
@@ -258,13 +318,10 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
       blockInstructions <- Map.delete (mkName "") <$> gets _envBlockInstructions
       unless (Map.null blockInstructions) $ error $ printf "unclosed blocks in %s\n  %s" name (show blockInstructions)
       blocks <- gets _envBasicBlocks
-      (retType, argTypes) <- getFunctionType name
-      -- TODO: improve this check
-      -- when (retType /= cgTy) $ error $ printf "return type mismatch for %s\n  retTy: %s\n  cgTy: %s\n" name (show retType) (show cgTy)
       let def = GlobalDefinition functionDefaults
-            { name        = mkName name
-            , parameters  = ([Parameter (cgLLVMType argType) (mkName a) [] | (a, argType) <- zip args argTypes], False) -- HINT: False - no var args
-            , returnType  = llvmRetType
+            { name        = mkNameG name
+            , parameters  = ([Parameter (cgLLVMType argType) (mkNameG a) [] | (a, argType) <- zip args argTypes], False) -- HINT: False - no var args
+            , returnType  = llvmReturnType
             , basicBlocks = Map.elems blocks
             , callingConvention = if name == "grinMain" then CC.C else CC.Fast
             , linkage = if name == "grinMain" then L.External else L.Private
@@ -274,9 +331,10 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
       modify' (\env@Env{..} -> env {_envDefinitions = def : _envDefinitions})
       pure $ O unitCGType unit
 
-    ProgramF defs -> do
+    ProgramF exts defs -> do
       -- register prim fun lib
-      registerPrimFunLib
+      runtimeErrorExternal
+      mapM registerPrimFunLib exts
       sequence_ (map snd defs) >> pure (O unitCGType unit)
 
     SFetchIF name Nothing -> do
@@ -293,6 +351,7 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
       TypeEnv{..} <- gets _envTypeEnv
       let locs          = case Map.lookup name _variable of
             Just (T_SimpleType (T_Location l)) -> l
+            Just (T_SimpleType T_UnspecifiedLocation) -> []
             x -> error $ printf "variable %s can not be fetched, %s is not a location type" name (show $ pretty x)
           nodeSet       = mconcat [_location V.! loc | loc <- locs]
           resultCGType  = toCGType $ T_NodeSet nodeSet
@@ -300,8 +359,8 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
       codeGenTagSwitch tagVal nodeSet $ \tag items -> do
         let nodeCGType  = toCGType $ T_NodeSet $ Map.singleton tag items
             nodeTU      = cgTaggedUnion nodeCGType
-        nodeAddress <- codeGenBitCast (printf "ptr_%s" . show $ PP tag) tagAddress (ptr $ tuLLVMType nodeTU)
-        nodeVal <- codeGenLocalVar (printf "node_%s" . show $ PP tag) (cgLLVMType nodeCGType) $ Load
+        nodeAddress <- codeGenBitCast ("ptr_" <> showTS (PP tag)) tagAddress (ptr $ tuLLVMType nodeTU)
+        nodeVal <- codeGenLocalVar ("node_" <> showTS (PP tag)) (cgLLVMType nodeCGType) $ Load
           { volatile        = False
           , address         = nodeAddress
           , maybeAtomicity  = Nothing
@@ -315,18 +374,26 @@ codeGen typeEnv = toModule . flip execState (emptyEnv {_envTypeEnv = typeEnv}) .
       codeGenStoreNode val nodeLocation
       pure $ O unitCGType unit
 
+    SStoreF val -> do
+      valTy <- typeOfVal val
+      nodeLocation <- codeGenIncreaseHeapPointer $ toCGType valTy
+      codeGenStoreNode val nodeLocation
+      pure $ O locationCGType nodeLocation
+
     expF -> error $ printf "missing codegen for:\n%s" (show $ pretty $ embed $ fmap fst expF)
 
 codeGenStoreNode :: Val -> Operand -> CG ()
 codeGenStoreNode val nodeLocation = do
   tuVal <- codeGenVal val
   tagVal <- codeGenExtractTag tuVal
-  T_NodeSet nodeSet <- typeOfVal val
+  valT <- typeOfVal val
+  let T_NodeSet nodeSet = valT
+
   let valueTU = taggedUnion nodeSet
   codeGenTagSwitch tagVal nodeSet $ \tag items -> do
     let nodeTU = taggedUnion $ Map.singleton tag items
     nodeVal <- copyTaggedUnion tuVal valueTU nodeTU
-    nodeAddress <- codeGenBitCast (printf "ptr_%s" . show $ PP tag) nodeLocation (ptr $ tuLLVMType nodeTU)
+    nodeAddress <- codeGenBitCast ("ptr_" <> showTS (PP tag)) nodeLocation (ptr $ tuLLVMType nodeTU)
     emit [Do Store
       { volatile        = False
       , address         = nodeAddress
@@ -337,6 +404,15 @@ codeGenStoreNode val nodeLocation = do
       }]
     pure $ (unitCGType, unit)
   pure ()
+
+convertStringOperand t o = case (cgType t,o) of
+  (T_SimpleType T_String, ConstantOperand stringRef@(GlobalReference{}))
+    -> ConstantOperand $ C.GetElementPtr
+        { inBounds = False
+        , address = stringRef
+        , indices = [Int {integerBits=64, integerValue=0}, Int {integerBits=64, integerValue=0}]
+        }
+  _ -> o
 
 codeGenCase :: Operand -> [(Alt, CG Result)] -> (CPat -> CG ()) -> CG Result
 codeGenCase opVal alts bindingGen = do
@@ -351,13 +427,13 @@ codeGenCase opVal alts bindingGen = do
 
   (altDests, altValues, altCGTypes) <- fmap List.unzip3 . forM orderedAlts $ \(Alt cpat _, altBody) -> do
     altCPatVal <- getCPatConstant cpat
-    altEntryBlock <- uniqueName ("block." ++ getCPatName cpat)
+    altEntryBlock <- uniqueName ("block." <> getCPatName cpat)
     activeBlock altEntryBlock
 
     bindingGen cpat
 
     altResult <- altBody
-    (altCGTy, altOp) <- getOperand (printf "result.%s" $ getCPatName cpat) altResult
+    (altCGTy, altOp) <- getOperand ("result." <> getCPatName cpat) altResult
 
     lastAltBlock <- gets _currentBlockName
 
@@ -403,7 +479,7 @@ codeGenTagSwitch tagVal nodeSet tagAltGen | Map.size nodeSet > 1 = do
 
   (altDests, altValues, altCGTypes) <- fmap List.unzip3 . forM possibleNodes $ \(tag, items) -> do
     let cpat = TagPat tag
-    altEntryBlock <- uniqueName ("block." ++ getCPatName cpat)
+    altEntryBlock <- uniqueName ("block." <> getCPatName cpat)
     altCPatVal <- getCPatConstant cpat
     activeBlock altEntryBlock
 
@@ -420,6 +496,7 @@ codeGenTagSwitch tagVal nodeSet tagAltGen | Map.size nodeSet > 1 = do
     activeBlock lastAltBlock
     -- HINT: convert alt result to common type
     convertedAltOp <- codeGenValueConversion altCGTy altOp resultCGType
+
     closeBlock $ Br
       { dest      = switchExit
       , metadata' = []
@@ -445,13 +522,17 @@ codeGenTagSwitch tagVal nodeSet tagAltGen | Map.size nodeSet > 1 = do
 codeGenTagSwitch tagVal nodeSet tagAltGen | [(tag, items)] <- Map.toList nodeSet = do
   uncurry O <$> tagAltGen tag items
 
+codeGenTagSwitch tagVal nodeSet tagAltGen = error $ "LLVM codegen: empty node set for " ++ show tagVal
+
 -- heap pointer related functions
 
-codeGenIncreaseHeapPointer :: String -> CG Operand -- TODO
-codeGenIncreaseHeapPointer name = do
+codeGenIncreaseHeapPointer :: CGType -> CG Operand -- TODO
+codeGenIncreaseHeapPointer varT = do
   -- increase heap pointer and return the old value which points to the first free block
-  CG_SimpleType {cgType = T_SimpleType (T_Location [loc])} <- getVarType name
-  nodeSet <- use $ envTypeEnv.location.ix loc
+  nodeSet <- case varT of
+    CG_SimpleType {cgType = T_SimpleType (T_Location locs)} -> mconcat <$> mapM (\loc -> use $ envTypeEnv.location.ix loc) locs
+    CG_NodeSet {cgType = T_NodeSet ns} -> pure ns
+    _ -> error $ show varT
 
   let tuPtrTy = ptr $ tuLLVMType $ taggedUnion nodeSet
   tuSizePtr <- codeGenLocalVar "alloc_bytes" tuPtrTy $ AST.GetElementPtr
@@ -490,25 +571,40 @@ external retty label argtys = modify' (\env@Env{..} -> env {_envDefinitions = de
     }
 
 -- available primitive functions
-registerPrimFunLib :: CG ()
-registerPrimFunLib = do
-  external i64 (mkName "_prim_int_print") [(i64, mkName "x")]
+registerPrimFunLib :: External -> CG ()
+registerPrimFunLib ext = do
+  external
+    (toLLVMType $ eRetType ext)
+    (mkName $ Text.unpack $ unNM $ eName ext)
+    [ (toLLVMType t, mkName ("x" ++ show n)) | (t,n) <- (eArgsType ext) `zip` [1..] ]
+  where
+    toLLVMType = \case
+      TySimple t -> typeGenSimpleType t
+      rest       -> error $ "Unsupported type:" ++ show rest
 
+runtimeErrorExternal :: CG ()
+runtimeErrorExternal =
+  external
+    (typeGenSimpleType T_Unit)
+    (mkName "__runtime_error")
+    [(typeGenSimpleType T_Int64, mkName "x0")]
+
+errorBlock :: CG ()
 errorBlock = do
   activeBlock $ mkName "error_block"
   let functionType = FunctionType
-                { resultType    = i64
+                { resultType    = VoidType
                 , argumentTypes = [i64]
                 , isVarArg      = False
                 }
 
-  codeGenLocalVar "error_result" i64 $ Call
-            { tailCallKind        = Just Tail
-            , callingConvention   = CC.C
-            , returnAttributes    = []
-            , function            = Right . ConstantOperand $ GlobalReference (ptr functionType) (mkName "_prim_int_print")
-            , arguments           = zip [ConstantOperand $ C.Int 64 666] (repeat [])
-            , functionAttributes  = []
-            , metadata            = []
-            }
+  emit [Do Call
+    { tailCallKind        = Just Tail
+    , callingConvention   = CC.C
+    , returnAttributes    = []
+    , function            = Right . ConstantOperand $ GlobalReference (ptr functionType) (mkName "__runtime_error")
+    , arguments           = zip [ConstantOperand $ C.Int 64 666] (repeat [])
+    , functionAttributes  = []
+    , metadata            = []
+    }]
   closeBlock $ Unreachable []

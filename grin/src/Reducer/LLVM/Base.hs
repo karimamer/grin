@@ -11,10 +11,11 @@ import Lens.Micro.Platform
 import Data.Word
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Text (Text)
 import Data.Vector (Vector)
 
-import Grin
-import qualified TypeEnv
+import Grin.Grin as Grin
+import qualified Grin.TypeEnv as TypeEnv
 
 import LLVM.AST as LLVM hiding (callingConvention)
 import LLVM.AST.Type as LLVM
@@ -40,6 +41,9 @@ tagLLVMType = i64
 locationLLVMType :: LLVM.Type
 locationLLVMType = ptr tagLLVMType
 
+mkNameG :: Grin.Name -> AST.Name
+mkNameG = mkName . Grin.unpackName
+
 data Env
   = Env
   { _envDefinitions       :: [Definition]                     -- Program state
@@ -52,6 +56,8 @@ data Env
   , _envTempCounter       :: Int
   , _envTypeEnv           :: TypeEnv.TypeEnv
   , _envTagMap            :: Map Tag Constant
+  , _envStringMap         :: Map Text AST.Name -- Grin String Literal -> AST.Name
+  , _envStringCounter     :: Int
   }
 
 emptyEnv = Env
@@ -63,8 +69,10 @@ emptyEnv = Env
   , _envBlockInstructions = mempty
   , _envBlockOrder        = mempty
   , _envTempCounter       = 0
-  , _envTypeEnv           = TypeEnv.TypeEnv mempty mempty mempty
+  , _envTypeEnv           = TypeEnv.emptyTypeEnv
   , _envTagMap            = mempty
+  , _envStringMap         = mempty
+  , _envStringCounter     = 0
   }
 
 concat <$> mapM makeLenses [''Env]
@@ -145,17 +153,17 @@ activeBlock name = modify' f where
       , _envBlockOrder        = Map.insert name (Map.findWithDefault (Map.size _envBlockOrder) name _envBlockOrder) _envBlockOrder
       }
 
-uniqueName :: String -> CG AST.Name
-uniqueName name = state (\env@Env{..} -> (mkName $ printf "%s.%d" name _envTempCounter, env {_envTempCounter = succ _envTempCounter}))
+uniqueName :: Grin.Name -> CG AST.Name
+uniqueName name = state (\env@Env{..} -> (mkName $ printf "%s.%d" (unpackName name) _envTempCounter, env {_envTempCounter = succ _envTempCounter}))
 
-getOperand :: String -> Result -> CG (CGType, Operand)
+getOperand :: Grin.Name -> Result -> CG (CGType, Operand)
 getOperand name = \case
   O cgTy a -> pure (cgTy, a)
   I cgTy i -> case cgLLVMType cgTy of
     VoidType  -> emit [Do i] >> pure (cgTy, unit)
     t         -> (cgTy,) <$> codeGenLocalVar name t i
 
-codeGenLocalVar :: String -> LLVM.Type -> AST.Instruction -> CG LLVM.Operand
+codeGenLocalVar :: Grin.Name -> LLVM.Type -> AST.Instruction -> CG LLVM.Operand
 codeGenLocalVar name ty instruction = do
   varName <- uniqueName name
   emit [varName := instruction]

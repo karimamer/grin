@@ -4,9 +4,9 @@ module Transformations.Optimising.UpdateEliminationSpec where
 import Transformations.Optimising.UpdateElimination
 
 import Test.Hspec
-import GrinTH
-import Test hiding (newVar)
-import Assertions
+import Grin.TH
+import Test.Test hiding (newVar)
+import Test.Assertions
 
 
 runTests :: IO ()

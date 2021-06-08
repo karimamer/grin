@@ -7,6 +7,7 @@ import Text.Printf
 import Data.Word
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Vector (Vector)
@@ -23,9 +24,15 @@ import LLVM.AST.Type hiding (Type, void)
 import qualified LLVM.AST.Type as LLVM
 
 import Reducer.LLVM.Base
-import Grin
-import TypeEnv
-import Pretty
+import Grin.Grin as Grin
+import Grin.TypeEnv
+import Grin.Pretty
+
+stringStructType :: LLVM.Type
+stringStructType = LLVM.StructureType False [ptr i8, i64]
+
+stringType :: LLVM.Type
+stringType = ptr stringStructType
 
 typeGenSimpleType :: SimpleType -> LLVM.Type
 typeGenSimpleType = \case
@@ -33,8 +40,12 @@ typeGenSimpleType = \case
   T_Word64  -> i64
   T_Float   -> float
   T_Bool    -> i1
+  T_String  -> stringType
+  T_Char    -> i8
   T_Unit    -> LLVM.void
-  T_Location _  -> locationLLVMType
+  T_Location _          -> locationLLVMType
+  T_UnspecifiedLocation -> locationLLVMType
+  T_Dead -> error $ "Dead/unused type was given."
 
 locationCGType :: CGType
 locationCGType = toCGType $ T_SimpleType $ T_Location []
@@ -138,7 +149,7 @@ codeGenExtractTag tuVal = do
     , metadata  = []
     }
 
-codeGenBitCast :: String -> Operand -> LLVM.Type -> CG Operand
+codeGenBitCast :: Grin.Name -> Operand -> LLVM.Type -> CG Operand
 codeGenBitCast name value dstType = do
   codeGenLocalVar name dstType $ AST.BitCast
     { operand0  = value
@@ -159,11 +170,20 @@ codeGenValueConversion srcCGType srcOp dstCGType = case srcCGType of
   _ | isLocation srcCGType && isLocation dstCGType  -> pure srcOp
   _ -> copyTaggedUnion srcOp (cgTaggedUnion srcCGType) (cgTaggedUnion dstCGType)
   where isLocation = \case
-          CG_SimpleType{cgType = T_SimpleType (T_Location{})} -> True
+          CG_SimpleType{cgType = T_SimpleType T_Location{}} -> True
+          CG_SimpleType{cgType = T_SimpleType T_UnspecifiedLocation} -> True
           _ -> False
 
 commonCGType :: [CGType] -> CGType
-commonCGType (ty@CG_SimpleType{} : tys) | all (ty==) tys = ty
+commonCGType tys | Just ty <- foldM joinSimpleType (head tys) tys = ty where
+  joinSimpleType :: CGType -> CGType -> Maybe CGType
+  joinSimpleType t@(CG_SimpleType l1 (T_SimpleType t1)) (CG_SimpleType l2 (T_SimpleType t2)) | l1 == l2 = case (t1, t2) of
+    -- join locations
+    (T_Location p1, T_Location p2) -> Just . CG_SimpleType l1 . T_SimpleType $ T_Location (List.nub $ p1 ++ p2)
+    _ | t1 == t1  -> Just t
+      | otherwise -> Nothing
+  joinSimpleType _ _ = Nothing
+
 commonCGType tys | all isNodeSet tys = toCGType $ T_NodeSet $ mconcat [ns | CG_NodeSet _ (T_NodeSet ns) _ <- tys] where
   isNodeSet = \case
     CG_NodeSet{} -> True
@@ -178,9 +198,8 @@ toCGType t = case t of
 getVarType :: Grin.Name -> CG CGType
 getVarType name = do
   TypeEnv{..} <- gets _envTypeEnv
-  case Map.lookup name _variable of
-    Nothing -> error ("unknown variable " ++ name)
-    Just ty -> pure $ toCGType ty
+  pure $ maybe (error ("unknown variable " ++ unpackName name)) toCGType
+       $ Map.lookup name _variable
 
 getFunctionType :: Grin.Name -> CG (CGType, [CGType])
 getFunctionType name = do

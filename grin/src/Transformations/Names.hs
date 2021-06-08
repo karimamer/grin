@@ -4,34 +4,72 @@ module Transformations.Names where
 import Text.Printf
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 
 import Control.Monad
 import Control.Monad.State
 
 import Data.Functor.Foldable as Foldable
-import Grin
+import qualified Data.Foldable
 
+import Grin.Grin
 import Transformations.Util
+import Data.Bifunctor (second)
 
 -- name monad
 
 data NameEnv
   = NameEnv
   { namePool  :: Map Name Int
+  , nameSet   :: Set Name
   }
 
 type NameM = State NameEnv
 
 mkNameEnv :: Exp -> NameEnv
-mkNameEnv = undefined
+mkNameEnv exp = NameEnv mempty (cata folder exp) where
+  folder e = foldNameDefExpF (const Set.singleton) e `mappend` Data.Foldable.fold e
 
 deriveNewName :: Name -> NameM Name
-deriveNewName name = state $ \env@NameEnv{..} ->
-  let idx = Map.findWithDefault 0 name namePool
-  in (printf "%s.%d" name idx, env {namePool = Map.insert name (succ idx) namePool})
+deriveNewName name = do
+  (newName, conflict) <- state $ \env@NameEnv{..} ->
+    let idx = Map.findWithDefault 0 name namePool
+        new = packName $ printf "%s.%d" name idx
+    in  ( (new, Set.member new nameSet)
+        , env {namePool = Map.insert name (succ idx) namePool, nameSet = Set.insert new nameSet}
+        )
+  if conflict
+    then deriveNewName name
+    else pure newName
 
-evalNameM :: NameM a -> a
-evalNameM m = evalState m (NameEnv mempty)
+deriveWildCard :: NameM Name
+deriveWildCard = do
+  (newWildCard, conflict) <- state $ \env@NameEnv{..} ->
+    let wildcard = "_"
+        idx = Map.findWithDefault 0 wildcard namePool
+        new = packName $ printf "%s%d" wildcard idx
+    in  ( (new, Set.member new nameSet)
+        , env {namePool = Map.insert wildcard (succ idx) namePool, nameSet = Set.insert new nameSet}
+        )
+  if conflict
+    then deriveWildCard
+    else pure newWildCard
+
+boolTF :: a -> a -> Bool -> a
+boolTF true false x = if x then true else false
+
+--TODO: this should be put into a Piple.Definitions module
+data ExpChanges
+  = NoChange
+  | NewNames
+  -- only relevant heap operations
+  -- (e.g.: deleting a dead case alternative should not trigger this)
+  | DeletedHeapOperation
+  deriving (Eq, Show)
+
+evalNameM :: Exp -> NameM a -> (a, ExpChanges)
+evalNameM e m = second (boolTF NoChange NewNames . Map.null . namePool) $ runState m (mkNameEnv e)
 
 -- refresh names
 
@@ -74,7 +112,7 @@ instance MapVal Val
 
 mapNameUseExpM :: Monad m => (Name -> m Name) -> Exp -> m Exp
 mapNameUseExpM f = \case
-  SApp name vals    -> SApp name  <$> mapM (mapNamesValM f) vals
+  SApp name vals    -> SApp       <$> f name <*> mapM (mapNamesValM f) vals
   ECase val alts    -> ECase      <$> mapNamesValM f val <*> pure alts
   SReturn val       -> SReturn    <$> mapNamesValM f val
   SStore val        -> SStore     <$> mapNamesValM f val
@@ -84,7 +122,7 @@ mapNameUseExpM f = \case
 
 mapNameDefExpM :: Monad m => (Name -> m Name) -> Exp -> m Exp
 mapNameDefExpM f = \case
-  Def name args body          -> Def name <$> mapM f args <*> pure body
+  Def name args body          -> Def <$> f name <*> mapM f args <*> pure body
   EBind leftExp lpat rightExp -> EBind leftExp <$> mapNamesValM f lpat <*> pure rightExp
   Alt cpat body               -> Alt <$> mapNamesCPatM f cpat <*> pure body
   exp                         -> pure exp

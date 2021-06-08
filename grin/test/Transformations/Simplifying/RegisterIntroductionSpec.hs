@@ -6,10 +6,10 @@ import Test.Hspec
 import Transformations.Simplifying.RegisterIntroduction
 import Test.QuickCheck.Property
 
-import Grin
-import GrinTH
-import Assertions
-import Test hiding (asVal)
+import Grin.Grin
+import Grin.TH
+import Test.Assertions
+import Test.Test hiding (asVal)
 
 
 spec :: Spec
@@ -42,7 +42,8 @@ spec = do
               pure 2
             |]
       pending
-      registerIntroduction 0 (ctx before) `sameAs` (ctx after)
+      pure ()
+      --registerIntroduction 0 (ctx before) `sameAs` (ctx after)
 
   forM_ programGenerators $ \(name, gen) -> do
     describe name $ do

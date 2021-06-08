@@ -1,11 +1,11 @@
 module TestSpec where
 
-import Test
+import Test.ExtendedSyntax.Old.Test
 import Test.Hspec
 import Test.QuickCheck
 import Test.QuickCheck.Monadic
 import Control.DeepSeq
-import Check
+import Test.Check
 
 import Data.List (nub)
 import qualified Data.Set as Set
@@ -26,8 +26,7 @@ spec = do
       uniqueValues
 
   it "withGADTs generate unique tags as constructors" $ do
-    pending
-    -- NOTE: commented out due type error
+    pendingWith "commented out due type error"
     {-
     property $ forAll
       (do n <- abs <$> arbitrary

@@ -1,12 +1,14 @@
 {-# LANGUAGE LambdaCase, TupleSections, ViewPatterns #-}
 module Transformations.Optimising.CopyPropagation where
 
-import Text.Printf
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Functor.Foldable as Foldable
-import Grin
-import Pretty
+
+import Text.Printf
+import Lens.Micro.Extra
+
+import Grin.Grin
 import Transformations.Util
 
 {-
@@ -54,5 +56,22 @@ copyPropagation e = hylo folder builder (mempty, e) where
   folder :: ExpF Exp -> Exp
   folder = \case
     -- right unit law
-    EBindF (SReturn val) lpat rightExp | val == lpat -> rightExp
+    EBindF leftExp lpat (SReturn val) | val == lpat, isn't _ValVar lpat -> leftExp
+
+    -- left unit law ; cleanup matching constants
+    EBindF (SReturn val) lpat rightExp
+      | val == lpat
+      , isConstant val
+      -> rightExp
+    -- left unit law ; cleanup x <- pure y copies
+    {- NOTE: This case could be handled by SDVE as well, however
+       performing it locally saves us an effect tracking analysis.
+       This is because here, we have more information about variable
+       bidnings. We know for sure that such copying bindings are not needed
+       since all the occurences of the left-hand side have been replaced with
+       the variable on the right-hand side.
+    -}
+    EBindF (SReturn Var{}) Var{} rightExp
+      -> rightExp
+
     exp -> embed exp

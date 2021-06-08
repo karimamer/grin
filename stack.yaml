@@ -1,16 +1,24 @@
-resolver: lts-10.10
+resolver: lts-14.16
 
 # due to functor-infix
 allow-newer: true
 
 packages:
-- 'grin'
+  - 'grin'
 
 extra-deps:
   - monad-gen-0.3.0.1
-  - llvm-hs-pretty-0.2.0.0
   - functor-infix-0.0.5
   - QuickCheck-GenT-0.2.0
+  - set-extra-1.4.1
+  - llvm-hs-pretty-0.6.1.0
+  - system-posix-redirect-1.1.0.1
+  - github: yatima-inc/llvm-hs
+    commit: 868e23a13942703255979369defdb49ac57b6866
+    branch: llvm-7
+    subdirs:
+      - llvm-hs
+      - llvm-hs-pure
 
 flags:
   llvm-hs:

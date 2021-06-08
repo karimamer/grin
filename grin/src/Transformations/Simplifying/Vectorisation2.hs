@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase, RecordWildCards #-}
+{-# LANGUAGE LambdaCase, RecordWildCards, OverloadedStrings #-}
 module Transformations.Simplifying.Vectorisation2 (vectorisation) where
 
 import Data.Map (Map)
@@ -14,8 +14,8 @@ import Text.PrettyPrint.ANSI.Leijen (pretty)
 
 import Text.Printf
 
-import Grin
-import TypeEnv
+import Grin.Grin
+import Grin.TypeEnv
 
 import Control.Monad.State
 
@@ -27,8 +27,8 @@ getVarNodeArity typeEnv@TypeEnv{..} name = case Map.lookup name _variable of
   Just (T_SimpleType _) -> Nothing
   Just (T_NodeSet ns)   -> Just $ maximum [1 + V.length args | args <- Map.elems ns]
 
-vectorisation :: (TypeEnv, Exp) -> (TypeEnv, Exp)
-vectorisation (typeEnv, expression) = (typeEnv, ana folder (Map.empty, expression))
+vectorisation :: TypeEnv -> Exp -> Exp
+vectorisation typeEnv expression = ana folder (Map.empty, expression)
   where
     folder :: VectorisationAccumulator -> ExpF VectorisationAccumulator
     folder (nameStore, expression) =
@@ -37,7 +37,7 @@ vectorisation (typeEnv, expression) = (typeEnv, ana folder (Map.empty, expressio
           Nothing           -> EBindF (nameStore, simpleexp) var (nameStore, exp)
           Just maximumArity -> EBindF (nameStore, simpleexp) nodeContents (newNameStore, exp)
            where
-            nodeContents = VarTagNode (name <> show 0) (map (\i -> Var (name <> show i)) [1 .. maximumArity])
+            nodeContents = VarTagNode (name <> "0") (map (\i -> Var (name <> packName (show i))) [1 .. maximumArity])
             newNameStore = Map.insert name nodeContents nameStore
         ECase (Var name) alts | Just nodeContents <- Map.lookup name nameStore
           -> ECaseF nodeContents (map (\subExpression -> (nameStore, subExpression)) alts)
